@@ -108,6 +108,8 @@ The voter's browser generates a credential key pair, the registrar blind-signs t
 
 The registrar sees only the blinded value. The ballot box sees no login. Before use, the client validates the issuing public key, because blindness depends on a well-formed key.
 
+The registrar keeps the blinded value and its blind signature with the roll entry. If the answer gets lost, the same client can fetch the same blind signature again; a request with another blinded value is refused.
+
 Lost credentials cannot be reissued in v1. A reissue would either break the count invariant or require revoking a credential that the registrar cannot identify.
 
 ### 5.2 Casting
@@ -219,7 +221,7 @@ Format rules:
 - The leaf hash is SHA-256 over a domain-separation byte and the encoded entry.
 - A signed tree head contains election ID, tree size, root hash, timestamp and signature. One is published at every phase transition and at a fixed interval.
 - The log serves inclusion proofs and consistency proofs between any two tree heads.
-- Roll references are salted hashes of the identity plugin's subject ID. Each voter can be told their own reference to check their roll entry and issuance status.
+- Roll references are salted hashes of the identity plugin's subject ID: SHA-256 over the canonical encoding of `["stimmig-roll-v1", salt, provider, subject]`. The salt is 32 random bytes per election and stays secret at the registrar, so that nobody can test whether a known address is on the roll. Each voter is told their own reference when the credential is issued, to check their roll entry and issuance status.
 
 Encoding details:
 
@@ -320,7 +322,7 @@ Identity comes from pluggable providers that return a stable subject ID; eligibi
 ```go
 type IdentityProvider interface {
     ID() string
-    Begin(ctx context.Context, electionID string) (redirectURL string, err error)
+    Begin(ctx context.Context, electionID, state string) (redirectURL string, err error)
     Complete(ctx context.Context, callback *http.Request) (Subject, error)
 }
 
@@ -341,6 +343,8 @@ type Subject struct {
 Rules:
 
 - An election may accept several providers; the roll stores provider and subject ID per voter.
+- `Begin` receives a state value that names the registration session, and the provider hands it back in the `state` query parameter of its callback. A provider may serve pages of its own under `/v1/identity/{provider}`.
+- The email provider shows a form for the address and mails a login link, authenticated with HMAC-SHA256 under a secret of the registrar. The subject ID is the address in lower case. A link is mailed only to addresses on the roll, and the form answers the same either way, so that it neither reveals the roll nor mails strangers.
 - The registrar stores only the roll reference and an issued flag. It keeps no profile data.
 - v1 plugins are Go packages compiled into the registrar. An out-of-process plugin protocol can follow.
 
@@ -355,12 +359,12 @@ All services are stateless Go processes that scale horizontally on Kubernetes; P
 | Registrar | Roll references and issued flags in its own database | Horizontal, autoscaled |
 | Ballot box | Ballots and used credentials in its own database | Horizontal, autoscaled |
 | Log | Entries, Merkle nodes and tree heads | One sequencer per election for appends; read path horizontal and cacheable |
-| Tally | None; runs once at the close | Single job |
+| Tally | None; runs once at the close, inside the registrar, which holds the election key | Single request |
 | Static client | None | Any static host or CDN |
 
 Deployment rules:
 
-- One Go binary provides all roles as subcommands: `registrar`, `ballotbox`, `log`, `tally`, `verify`.
+- One Go binary provides all roles as subcommands: the services `log`, `registrar` and `ballotbox`, and the tools `admin`, `client`, `verify` and `tally`. The services are configured by environment variables only, so that tokens never appear on a command line.
 - Registrar and ballot box run as separate deployments with separate databases, credentials and domains. Operation by separate parties is supported and recommended.
 - The ballot box and its ingress write no IP addresses or other client identifiers to logs or metrics.
 - A valid credential signature is the ballot box's abuse control, so it needs no IP-based rate limiting.
@@ -370,6 +374,40 @@ Deployment rules:
 - Log exports and proofs are immutable once published and can be served from object storage.
 - Signing keys are accessed through an HSM interface (PKCS#11 or a network HSM); a software key store exists for development.
 - Deployment artefacts are a container image and a Helm chart.
+
+Service interfaces:
+
+All request and response bodies are canonical CBOR; errors are plain text with an HTTP status. Admin and writer calls carry a bearer token.
+
+| Service | Call | Caller | Purpose |
+| --- | --- | --- | --- |
+| Log | `POST /v1/keys` | Admin | Create a log key |
+| Log | `POST /v1/elections` | Admin | Create the log from the manifest |
+| Log | `POST /v1/elections/{id}/entries` | Registrar, ballot box | Append entries atomically and sign a tree head |
+| Log | `GET /v1/elections/{id}/head`, `/export`, `/inclusion`, `/consistency` | Public | Tree head, complete log, proofs |
+| Registrar | `POST /v1/keys` | Admin | Create the issuing key and the election key |
+| Registrar | `POST /v1/elections` | Admin | Register the election by its manifest |
+| Registrar | `PUT /v1/elections/{id}/roll` | Admin | Publish the roll and open registration |
+| Registrar | `POST /v1/elections/{id}/close` | Admin | Close registration |
+| Registrar | `POST /v1/elections/{id}/tally` | Admin | Publish the key, the plaintexts and the result |
+| Registrar | `POST /v1/elections/{id}/sessions` | Voter | Send the blinded credential, receive the login URL |
+| Registrar | `GET /v1/callback/{provider}` | Voter | Return from the identity provider; the credential is issued |
+| Registrar | `GET /v1/sessions/{session}` | Voter | Fetch the blind signature |
+| Ballot box | `POST /v1/keys` | Admin | Create a receipt key |
+| Ballot box | `POST /v1/elections` | Admin | Register the election by its manifest |
+| Ballot box | `POST /v1/elections/{id}/open`, `/close` | Admin | Open the voting; close it and publish the ballots |
+| Ballot box | `POST /v1/elections/{id}/ballots` | Voter | Cast a ballot, receive the receipt |
+| Ballot box | `GET /v1/elections/{id}` | Public | Phase and number of ballots cast |
+
+Service rules:
+
+- **Keys per election.** Every election has its own log key, issuing key, election key and receipt key. An issuing key must never serve two elections: the registrar signs blindly and could not tell for which election a credential is, so a voter of one election could obtain a credential for another.
+- **Election key.** The registrar holds the election private key until the tally, and the ballot box holds the ciphertexts until the close. Reading ballots early therefore needs both services, the same assumption as for anonymity.
+- **Writers.** The log gives the registrar and the ballot box one token each and limits each to its entry types: roll, issuance, registration close and the tally entries for the registrar; ballots and voting close for the ballot box.
+- **Safe repetition.** Every append names the log size it expects and is refused otherwise. The registrar and the ballot box verify the whole public log before they open the voting, close it or tally, and act on the phase they find there. Closing the voting and tallying can be repeated after a failure.
+- **Order of phases.** The ballot box opens the voting only when registration is closed in the public log. Overlapping registration and voting (section 4) is not implemented.
+- **Repeated ballot.** The ballot box answers the same ballot of a credential again with the same receipt, so that a voter whose connection broke can retry. Another ballot of that credential is refused.
+- **Sessions.** A registration session lasts one hour, an email login link 30 minutes.
 
 ## 11. Web client
 
@@ -447,4 +485,6 @@ After v1: mixnet profile, SAML and BundID, threshold decryption, blind BLS and p
 - **Elekto review.** Elekto was reviewed from source (`elekto-io/elekto`, commit `da4c19c`, March 2026) and is not used as a base: the server receives every ballot in clear in the authenticated session, nothing is publicly verifiable, and the operator is fully trusted. Its code is Apache-2.0. It uses Schulze with winning votes and leaves ties unresolved, as Stimmig does by default. Lessons taken: uniqueness is enforced by database constraints and phases are checked on the server (section 10), decrypted rankings are validated strictly, and no voter-to-ballot link is stored. Worth borrowing for the interface: a random candidate order and an explicit "no opinion" wording for unranked candidates.
 - **Message formats.** All signed and encrypted messages have a context text and the election ID (section 5.6). Ballot encryption is HPKE, a standard construction of the ECDH and AES-GCM named before. The credential uses the deterministic RFC 9474 variant, because the message contains a fresh public key; the signature is then a plain RSASSA-PSS signature that browsers verify natively.
 - **Cryptography libraries.** Blind RSA and HPKE come from `github.com/cloudflare/circl`; no primitive is implemented in this project. The golden export in `election/testdata` was checked with an independent Python implementation (`cbor2`, `cryptography`, `pyhpke`): all signatures verify and all ballots decrypt to the logged plaintexts.
+- **Services (M4).** The interfaces and rules are in section 10. PostgreSQL is the only store; the tests that need it run against a real database and are skipped without one. The driver is `github.com/jackc/pgx/v5`. The voter's side is the `client` package with a command line front end; the web client of M5 is meant to run the same code.
+- **Open points from M4.** Private keys are stored in the service databases in clear until the HSM interface of M6. The log service computes proofs from all leaf hashes and does not store inner Merkle nodes yet. The ballots of a close and the entries of a tally go to the log in one request, which bounds an election to roughly 100000 ballots. If the registrar's database commit fails right after a successful log append, the registrar refuses further appends for that election until an operator repairs its stored log size; nothing wrong is logged. The log does not check the lifecycle order of appended entries; the verifier does. There is no rate limiting, no schedule (the admin triggers every phase), no periodic tree head, no SMTP authentication, and the registrar's callback page does not redirect back to a web client yet.
 - **Open points from M3.** Re-voting is not implemented. The verifier does not reject two ballots with the same ciphertext, because the binding to the credential makes a copy undecryptable. The reasons that the tally gives for invalid ballots are English text of the Go implementation and part of the result entry, so an independent verifier must reproduce them; fixed reason codes would be better. The blinding state of the circl library cannot be serialised, which the web client needs if issuance uses a full-page redirect (M5). The roll is one log entry, which limits it to about 16 million references in the current decoder settings and makes large rolls a large entry.

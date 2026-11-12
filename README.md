@@ -12,8 +12,9 @@ The project follows the milestones of SPEC.md section 13.
 | M0: Repository | Done |
 | M1: Tally library | Done |
 | M2: Log | Done; the log is in memory until the services arrive in M4 |
-| M3: Cryptography | Done; an election runs end to end inside the tests |
-| M4 to M8 | Not started |
+| M3: Cryptography | Done |
+| M4: Services | Done; see the open points in SPEC.md section 14 |
+| M5 to M8 | Not started |
 
 ## Tally
 
@@ -77,7 +78,75 @@ signature and the receipt. The package `election` defines the bodies of the
 log entries, the steps that write them, and the verifier. The messages are in
 [SPEC.md](SPEC.md) section 5.6.
 
+## Running an election
+
+The services need PostgreSQL. Each service gets its own database:
+
+```bash
+export STIMMIG_DATABASE_URL=postgres://stimmig:secret@localhost/stimmig_log
+export STIMMIG_LISTEN=127.0.0.1:8081 STIMMIG_ADMIN_TOKEN=log-admin
+export STIMMIG_REGISTRAR_TOKEN=log-registrar STIMMIG_BALLOTBOX_TOKEN=log-ballotbox
+go run ./cmd/stimmig log
+```
+
+```bash
+export STIMMIG_DATABASE_URL=postgres://stimmig:secret@localhost/stimmig_registrar
+export STIMMIG_LISTEN=127.0.0.1:8082 STIMMIG_ADMIN_TOKEN=registrar-admin
+export STIMMIG_LOG_URL=http://127.0.0.1:8081 STIMMIG_LOG_TOKEN=log-registrar
+export STIMMIG_PUBLIC_URL=http://127.0.0.1:8082
+export STIMMIG_EMAIL_SECRET=change-me-to-32-random-characters
+go run ./cmd/stimmig registrar
+```
+
+```bash
+export STIMMIG_DATABASE_URL=postgres://stimmig:secret@localhost/stimmig_ballotbox
+export STIMMIG_LISTEN=127.0.0.1:8083 STIMMIG_ADMIN_TOKEN=ballotbox-admin
+export STIMMIG_LOG_URL=http://127.0.0.1:8081 STIMMIG_LOG_TOKEN=log-ballotbox
+go run ./cmd/stimmig ballotbox
+```
+
+Without `STIMMIG_SMTP_ADDR` the registrar prints the login mails instead of
+sending them. The admin drives the election:
+
+```bash
+export STIMMIG_LOG_URL=http://127.0.0.1:8081 STIMMIG_LOG_ADMIN_TOKEN=log-admin
+export STIMMIG_REGISTRAR_URL=http://127.0.0.1:8082 STIMMIG_REGISTRAR_ADMIN_TOKEN=registrar-admin
+export STIMMIG_BALLOTBOX_URL=http://127.0.0.1:8083 STIMMIG_BALLOTBOX_ADMIN_TOKEN=ballotbox-admin
+echo '{"title": "Board", "tally": {"candidates": ["A", "B", "C"], "method": "schulze"}}' > election.json
+echo 'ada@example.org' > voters.txt
+ID=$(go run ./cmd/stimmig admin create -definition election.json)
+go run ./cmd/stimmig admin roll -election $ID -voters voters.txt
+```
+
+A voter registers, which waits until the mailed link is opened, and votes
+after the admin has closed registration and opened the voting:
+
+```bash
+go run ./cmd/stimmig client register -state ada.json -election $ID -email ada@example.org \
+  -log http://127.0.0.1:8081 -registrar http://127.0.0.1:8082 -ballotbox http://127.0.0.1:8083
+go run ./cmd/stimmig admin close-registration -election $ID
+go run ./cmd/stimmig admin open-voting -election $ID
+go run ./cmd/stimmig client cast -state ada.json -ranking "A>B=C"
+go run ./cmd/stimmig admin close-voting -election $ID
+go run ./cmd/stimmig admin tally -election $ID
+go run ./cmd/stimmig client check -state ada.json
+```
+
+Anyone can download and verify the log:
+
+```bash
+curl -s http://127.0.0.1:8081/v1/elections/$ID/export -o election.cbor
+go run ./cmd/stimmig verify election.cbor
+```
+
+The service interfaces are in [SPEC.md](SPEC.md) section 10.
+
 ## Tests
+
+The tests of the services need a PostgreSQL database and are skipped without
+`STIMMIG_TEST_DATABASE_URL`, for example
+`postgres://stimmig:stimmig@localhost/stimmig_test`.
+
 
 ```bash
 go test ./...
