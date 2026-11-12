@@ -76,9 +76,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /v1/elections/{id}/roll", s.admin(s.roll))
 	mux.HandleFunc("POST /v1/elections/{id}/close", s.admin(s.close))
 	mux.HandleFunc("POST /v1/elections/{id}/tally", s.admin(s.tally))
-	mux.HandleFunc("POST /v1/elections/{id}/sessions", handle(s.newSession))
+	mux.HandleFunc("POST /v1/elections/{id}/sessions", api.Handle(s.newSession))
 	mux.HandleFunc("GET /v1/callback/{provider}", s.callback)
-	mux.HandleFunc("GET /v1/sessions/{session}", handle(s.credential))
+	mux.HandleFunc("GET /v1/sessions/{session}", api.Handle(s.credential))
 	for id, p := range s.Providers {
 		if h, ok := p.(http.Handler); ok {
 			mux.Handle("/v1/identity/"+id, h)
@@ -87,63 +87,16 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
-// httpError is an error with its response status.
-type httpError struct {
-	code int
-	msg  string
-}
-
-func (e *httpError) Error() string { return e.msg }
-
-func errf(code int, format string, a ...any) error {
-	return &httpError{code, fmt.Sprintf(format, a...)}
-}
-
-// handle turns a function that returns a response body or an error into a
-// handler. Errors without a status are internal and not shown.
-func handle(fn func(w http.ResponseWriter, r *http.Request) (any, error)) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		out, err := fn(w, r)
-		var he *httpError
-		switch {
-		case errors.As(err, &he):
-			http.Error(w, he.msg, he.code)
-		case err != nil:
-			http.Error(w, "internal error", http.StatusInternalServerError)
-		case out != nil:
-			api.Write(w, out)
-		}
-	}
-}
-
 func (s *Server) admin(fn func(w http.ResponseWriter, r *http.Request) (any, error)) http.HandlerFunc {
-	return handle(func(w http.ResponseWriter, r *http.Request) (any, error) {
-		if !api.Authorized(r, s.AdminToken) {
-			return nil, errf(http.StatusUnauthorized, "admin token required")
-		}
-		return fn(w, r)
-	})
+	return api.Admin(s.AdminToken, fn)
 }
 
 func electionID(r *http.Request) (merkle.Hash, error) {
 	id, err := api.ElectionID(r)
 	if err != nil {
-		return id, errf(http.StatusBadRequest, "election ID: %v", err)
+		return id, api.Errorf(http.StatusBadRequest, "election ID: %v", err)
 	}
 	return id, nil
-}
-
-// inTx runs fn in a transaction.
-func (s *Server) inTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	if err := fn(tx); err != nil {
-		return err
-	}
-	return tx.Commit()
 }
 
 // newKeys creates the issuing key and the election key of one election.
@@ -173,10 +126,10 @@ func (s *Server) newKeys(_ http.ResponseWriter, r *http.Request) (any, error) {
 func (s *Server) create(w http.ResponseWriter, r *http.Request) (any, error) {
 	var m publog.Manifest
 	if err := api.Read(w, r, &m); err != nil {
-		return nil, errf(http.StatusBadRequest, "%v", err)
+		return nil, api.Errorf(http.StatusBadRequest, "%v", err)
 	}
 	if err := m.Validate(); err != nil {
-		return nil, errf(http.StatusBadRequest, "%v", err)
+		return nil, api.Errorf(http.StatusBadRequest, "%v", err)
 	}
 	entry, err := publog.EncodeEntry(publog.TypeManifest, m)
 	if err != nil {
@@ -191,7 +144,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) (any, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return nil, err
 	}
-	err = s.inTx(r.Context(), func(tx *sql.Tx) error {
+	err = api.InTx(r.Context(), s.DB, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(r.Context(),
 			`UPDATE reg_keys SET election = $3 WHERE issuing_public = $1 AND election_public = $2 AND election IS NULL`,
 			m.IssuingKey, m.ElectionKey, id[:])
@@ -199,7 +152,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) (any, error) {
 			return err
 		}
 		if n, _ := res.RowsAffected(); n != 1 {
-			return errf(http.StatusBadRequest, "the keys of the manifest are unknown or already in use")
+			return api.Errorf(http.StatusBadRequest, "the keys of the manifest are unknown or already in use")
 		}
 		_, err = tx.ExecContext(r.Context(),
 			`INSERT INTO reg_elections (id, manifest, salt, phase) VALUES ($1, $2, $3, $4)`, id[:], raw, salt, phaseSetup)
@@ -234,7 +187,7 @@ func lock(ctx context.Context, tx *sql.Tx, id merkle.Hash) (state, error) {
 		`SELECT salt, phase, issued, log_size FROM reg_elections WHERE id = $1 FOR UPDATE`, id[:]).
 		Scan(&st.salt, &st.phase, &st.issued, &st.logSize)
 	if errors.Is(err, sql.ErrNoRows) {
-		return st, errf(http.StatusNotFound, "election not found")
+		return st, api.Errorf(http.StatusNotFound, "election not found")
 	}
 	return st, err
 }
@@ -258,21 +211,21 @@ func (s *Server) roll(w http.ResponseWriter, r *http.Request) (any, error) {
 	}
 	var roll api.Roll
 	if err := api.Read(w, r, &roll); err != nil {
-		return nil, errf(http.StatusBadRequest, "%v", err)
+		return nil, api.Errorf(http.StatusBadRequest, "%v", err)
 	}
 	ctx := r.Context()
-	return nil, s.inTx(ctx, func(tx *sql.Tx) error {
+	return nil, api.InTx(ctx, s.DB, func(tx *sql.Tx) error {
 		st, err := lock(ctx, tx, id)
 		if err != nil {
 			return err
 		}
 		if st.phase != phaseSetup {
-			return errf(http.StatusConflict, "the roll is already published")
+			return api.Errorf(http.StatusConflict, "the roll is already published")
 		}
 		var refs [][]byte
 		for _, v := range roll.Voters {
 			if _, ok := s.Providers[v.Provider]; !ok || v.Subject == "" {
-				return errf(http.StatusBadRequest, "voter with unknown provider %q or empty subject", v.Provider)
+				return api.Errorf(http.StatusBadRequest, "voter with unknown provider %q or empty subject", v.Provider)
 			}
 			ref := rollReference(st.salt, v.Provider, v.Subject)
 			res, err := tx.ExecContext(ctx,
@@ -299,13 +252,13 @@ func (s *Server) close(_ http.ResponseWriter, r *http.Request) (any, error) {
 		return nil, err
 	}
 	ctx := r.Context()
-	return nil, s.inTx(ctx, func(tx *sql.Tx) error {
+	return nil, api.InTx(ctx, s.DB, func(tx *sql.Tx) error {
 		st, err := lock(ctx, tx, id)
 		if err != nil {
 			return err
 		}
 		if st.phase != phaseOpen {
-			return errf(http.StatusConflict, "registration is not open")
+			return api.Errorf(http.StatusConflict, "registration is not open")
 		}
 		st.phase = phaseClosed
 		return s.logAppend(ctx, tx, st, publog.Record{
@@ -335,12 +288,12 @@ func (s *Server) tally(_ http.ResponseWriter, r *http.Request) (any, error) {
 		return rep.Result, nil
 	case election.PhaseVotingClosed:
 	default:
-		return nil, errf(http.StatusConflict, "the voting is not closed; the log is in phase %q", rep.Phase)
+		return nil, api.Errorf(http.StatusConflict, "the voting is not closed; the log is in phase %q", rep.Phase)
 	}
 	var private []byte
 	err = s.DB.QueryRowContext(ctx, `SELECT election_private FROM reg_keys WHERE election = $1`, id[:]).Scan(&private)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, errf(http.StatusNotFound, "election not found")
+		return nil, api.Errorf(http.StatusNotFound, "election not found")
 	}
 	if err != nil {
 		return nil, err
@@ -362,7 +315,7 @@ func (s *Server) newSession(w http.ResponseWriter, r *http.Request) (any, error)
 	}
 	var req api.SessionRequest
 	if err := api.Read(w, r, &req); err != nil {
-		return nil, errf(http.StatusBadRequest, "%v", err)
+		return nil, api.Errorf(http.StatusBadRequest, "%v", err)
 	}
 	if req.Provider == "" && len(s.Providers) == 1 {
 		for p := range s.Providers {
@@ -371,7 +324,7 @@ func (s *Server) newSession(w http.ResponseWriter, r *http.Request) (any, error)
 	}
 	provider, ok := s.Providers[req.Provider]
 	if !ok {
-		return nil, errf(http.StatusBadRequest, "unknown identity provider %q", req.Provider)
+		return nil, api.Errorf(http.StatusBadRequest, "unknown identity provider %q", req.Provider)
 	}
 	ctx := r.Context()
 	var phase string
@@ -380,20 +333,20 @@ func (s *Server) newSession(w http.ResponseWriter, r *http.Request) (any, error)
 		`SELECT e.phase, k.issuing_public FROM reg_elections e JOIN reg_keys k ON k.election = e.id WHERE e.id = $1`, id[:]).
 		Scan(&phase, &issuingPublic)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, errf(http.StatusNotFound, "election not found")
+		return nil, api.Errorf(http.StatusNotFound, "election not found")
 	}
 	if err != nil {
 		return nil, err
 	}
 	if phase != phaseOpen {
-		return nil, errf(http.StatusConflict, "registration is not open")
+		return nil, api.Errorf(http.StatusConflict, "registration is not open")
 	}
 	key, err := credential.ParseIssuingKey(issuingPublic)
 	if err != nil {
 		return nil, err
 	}
 	if len(req.Blinded) != key.Size() {
-		return nil, errf(http.StatusBadRequest, "the blinded value must have %d bytes", key.Size())
+		return nil, api.Errorf(http.StatusBadRequest, "the blinded value must have %d bytes", key.Size())
 	}
 	token := make([]byte, 32)
 	if _, err := rand.Read(token); err != nil {
@@ -420,7 +373,7 @@ func (s *Server) session(ctx context.Context, q interface {
 	err = q.QueryRowContext(ctx,
 		`SELECT election, blinded FROM reg_sessions WHERE id = $1 AND expires > now()`, session).Scan(&rawID, &blinded)
 	if errors.Is(err, sql.ErrNoRows) {
-		return id, nil, errf(http.StatusNotFound, "the session is unknown or has expired")
+		return id, nil, api.Errorf(http.StatusNotFound, "the session is unknown or has expired")
 	}
 	if err != nil {
 		return id, nil, err
@@ -449,14 +402,14 @@ func (s *Server) Eligible(ctx context.Context, session, provider, subject string
 
 // callback completes the login and issues the credential.
 func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
-	handle(func(w http.ResponseWriter, r *http.Request) (any, error) {
+	api.Handle(func(w http.ResponseWriter, r *http.Request) (any, error) {
 		provider, ok := s.Providers[r.PathValue("provider")]
 		if !ok {
-			return nil, errf(http.StatusNotFound, "unknown identity provider")
+			return nil, api.Errorf(http.StatusNotFound, "unknown identity provider")
 		}
 		subject, err := provider.Complete(r.Context(), r)
 		if err != nil {
-			return nil, errf(http.StatusForbidden, "%v", err)
+			return nil, api.Errorf(http.StatusForbidden, "%v", err)
 		}
 		ref, err := s.issue(r.Context(), r.URL.Query().Get("state"), subject)
 		if err != nil {
@@ -473,7 +426,7 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 // subject and logs the issuance. It issues one credential per roll entry;
 // repeating it for the same session changes nothing.
 func (s *Server) issue(ctx context.Context, session string, subject identity.Subject) (ref []byte, err error) {
-	err = s.inTx(ctx, func(tx *sql.Tx) error {
+	err = api.InTx(ctx, s.DB, func(tx *sql.Tx) error {
 		id, blinded, err := s.session(ctx, tx, session)
 		if err != nil {
 			return err
@@ -483,7 +436,7 @@ func (s *Server) issue(ctx context.Context, session string, subject identity.Sub
 			return err
 		}
 		if st.phase != phaseOpen {
-			return errf(http.StatusConflict, "registration is not open")
+			return api.Errorf(http.StatusConflict, "registration is not open")
 		}
 		ref = rollReference(st.salt, subject.Provider, subject.StableID)
 		var seq sql.NullInt64
@@ -491,7 +444,7 @@ func (s *Server) issue(ctx context.Context, session string, subject identity.Sub
 		err = tx.QueryRowContext(ctx, `SELECT seq, blinded FROM reg_roll WHERE election = $1 AND ref = $2`, id[:], ref).
 			Scan(&seq, &issuedFor)
 		if errors.Is(err, sql.ErrNoRows) {
-			return errf(http.StatusForbidden, "you are not on the electoral roll of this election")
+			return api.Errorf(http.StatusForbidden, "you are not on the electoral roll of this election")
 		}
 		if err != nil {
 			return err
@@ -499,7 +452,7 @@ func (s *Server) issue(ctx context.Context, session string, subject identity.Sub
 		if seq.Valid {
 			if !bytes.Equal(issuedFor, blinded) {
 				// Lost credentials are not reissued (SPEC.md section 5.1).
-				return errf(http.StatusConflict, "a credential was already issued for you")
+				return api.Errorf(http.StatusConflict, "a credential was already issued for you")
 			}
 		} else {
 			var private []byte
@@ -512,7 +465,7 @@ func (s *Server) issue(ctx context.Context, session string, subject identity.Sub
 			}
 			sig, err := credential.Issue(key, blinded)
 			if err != nil {
-				return errf(http.StatusBadRequest, "%v", err)
+				return api.Errorf(http.StatusBadRequest, "%v", err)
 			}
 			if _, err := tx.ExecContext(ctx,
 				`UPDATE reg_roll SET seq = $3, blinded = $4, blind_sig = $5 WHERE election = $1 AND ref = $2`,
@@ -539,7 +492,7 @@ func (s *Server) credential(_ http.ResponseWriter, r *http.Request) (any, error)
 		 JOIN reg_roll r ON r.election = s.election AND r.ref = s.ref AND r.blinded = s.blinded
 		 WHERE s.id = $1 AND s.expires > now()`, r.PathValue("session")).Scan(&c.BlindSignature, &c.RollReference)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, errf(http.StatusNotFound, "no credential yet: the login is not complete, or the session is unknown")
+		return nil, api.Errorf(http.StatusNotFound, "no credential yet: the login is not complete, or the session is unknown")
 	}
 	return c, err
 }

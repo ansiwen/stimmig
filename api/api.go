@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -143,4 +144,59 @@ func (c *Client) Raw(ctx context.Context, method, path string, in any) ([]byte, 
 		return nil, &StatusError{Code: resp.StatusCode, Message: strings.TrimSpace(string(body))}
 	}
 	return body, nil
+}
+
+// httpError is an error with its response status.
+type httpError struct {
+	code int
+	msg  string
+}
+
+func (e *httpError) Error() string { return e.msg }
+
+// Errorf returns an error that Handle answers with the given status and
+// message.
+func Errorf(code int, format string, a ...any) error {
+	return &httpError{code, fmt.Sprintf(format, a...)}
+}
+
+// Handle turns a function that returns a response body or an error into a
+// handler. Errors that were not made with Errorf are internal: they are
+// answered with status 500 and not shown.
+func Handle(fn func(w http.ResponseWriter, r *http.Request) (any, error)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		out, err := fn(w, r)
+		var he *httpError
+		switch {
+		case errors.As(err, &he):
+			http.Error(w, he.msg, he.code)
+		case err != nil:
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		case out != nil:
+			Write(w, out)
+		}
+	}
+}
+
+// Admin is Handle for requests that need the admin token.
+func Admin(token string, fn func(w http.ResponseWriter, r *http.Request) (any, error)) http.HandlerFunc {
+	return Handle(func(w http.ResponseWriter, r *http.Request) (any, error) {
+		if !Authorized(r, token) {
+			return nil, Errorf(http.StatusUnauthorized, "admin token required")
+		}
+		return fn(w, r)
+	})
+}
+
+// InTx runs fn in a database transaction.
+func InTx(ctx context.Context, db *sql.DB, fn func(tx *sql.Tx) error) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
