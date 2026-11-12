@@ -10,7 +10,7 @@ The project follows the milestones of SPEC.md section 13.
 | Milestone | State |
 | --- | --- |
 | M0: Repository | Done |
-| M1: Tally library | Done, see the open points below |
+| M1: Tally library | Done |
 | M2 to M8 | Not started |
 
 ## Tally
@@ -48,33 +48,8 @@ best first, and a rank group is an array of candidate IDs:
 The output is the result as JSON: winners, ranking, pairwise matrix, trace
 and tie-break events.
 
-### Rules the specification leaves open
-
-SPEC.md names the methods but not every detail. The library fixes these as
-follows; each is a decision to confirm.
-
-- **Pairwise strength.** Schulze, Ranked Pairs and Minimax measure a win by
-  its winning votes. Ranked Pairs prefers the smaller opposition among equal
-  winning votes.
-- **Borda.** A candidate scores one point per candidate ranked below and half
-  a point per candidate tied with. Unranked candidates are tied at the bottom.
-- **Equal ranks in instant runoff and single transferable vote.** The ballot's
-  weight is split equally among the continuing candidates of its highest rank
-  group.
-- **Single transferable vote.** Droop quota `floor(votes/(seats+1))+1`, fixed
-  at the start. Surpluses use the weighted inclusive Gregory method. The
-  surpluses of all candidates elected in one round are transferred together.
-- **Tie in an elimination.** The tie-break chain orders the candidates with
-  the fewest votes, and the last one is eliminated. If the chain ends in
-  declare-tie and the tie stands, the count stops and reports it.
-- **Tie between equally strong wins in Ranked Pairs.** Such wins are locked
-  together when that closes no cycle. Otherwise the tie-break chain orders the
-  candidates involved, and the wins are locked by the rank of the winner, then
-  of the loser.
-- **Head-to-head.** The rule moves the candidate who beats all other tied
-  candidates to the top and the one who loses to all to the bottom, and
-  repeats. The rest stay tied.
-- **Invalid ballots.** They are reported with a reason and not counted.
+The exact rules of every method and of the tie-break chain are in
+[SPEC.md](SPEC.md) section 8.
 
 ### Tests
 

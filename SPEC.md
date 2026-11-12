@@ -227,7 +227,17 @@ Ballot rules:
 | Borda | Positional | v1 |
 | Single transferable vote | Multi-winner, proportional | v1 |
 
-Multi-winner elections can use the top places of the Schulze ranking or single transferable vote. The exact single transferable vote rule set, meaning quota and transfer method, is fixed in M1.
+Multi-winner elections can use the top places of the Schulze ranking or single transferable vote. All other methods fill one seat only.
+
+Method details:
+
+- **Pairwise strength.** Schulze, Ranked Pairs and Minimax measure a pairwise win by its winning votes, not by its margin. Ranked Pairs prefers the smaller opposition among wins with equal winning votes.
+- **Rankings.** Schulze ranks by strongest paths, Ranked Pairs by the locked wins, Copeland by wins minus losses, Minimax by the largest defeat. Candidates that the method leaves level go through the tie-break chain.
+- **Borda.** A candidate scores one point for every candidate ranked below and half a point for every candidate tied with. Unranked candidates are tied at the bottom.
+- **Equal ranks in instant runoff and single transferable vote.** A ballot counts for the candidates of its highest rank group that still holds a continuing candidate, and its weight is split equally among them. A ballot with no continuing candidate is exhausted.
+- **Instant runoff.** The candidate with the fewest votes is eliminated until one is left.
+- **Single transferable vote.** The quota is the Droop quota `floor(votes / (seats + 1)) + 1`, fixed at the start over the non-empty valid ballots. A candidate who reaches the quota is elected. All ballots of an elected candidate are transferred at the fraction surplus / total of their weight (weighted inclusive Gregory method). The surpluses of all candidates elected in one round are transferred together, so their order never needs a tie-break. If nobody reaches the quota, the candidate with the fewest votes is eliminated. When the continuing candidates are as many as the open seats, all are elected.
+- **Invalid ballots.** A ballot that breaks a ballot rule is not counted and is reported with its reason.
 
 Tally interface and rules:
 
@@ -244,6 +254,14 @@ The admin chooses the tie-breaking when creating the election, and the choice is
 - **Declare tie.** The result reports the tie and the organisation decides outside the platform.
 
 The default chain is: most first ranks, then declare tie.
+
+How the chain is applied:
+
+- **Tied places in a ranking.** The chain orders every group of candidates that the method leaves level. If a group that straddles the last seat stays tied, the result reports the tie and names only the definite winners.
+- **Tied elimination.** In instant runoff and single transferable vote, the chain orders the candidates with the fewest votes, and the one ranked last is eliminated. If the chain leaves that tie standing, the count stops and reports the tie.
+- **Equally strong wins in Ranked Pairs.** Such wins are locked together when that closes no cycle. Otherwise the chain orders the candidates involved, and the wins are locked by the rank of their winner, then of their loser. If two wins stay level, the count stops and reports the tie.
+- **Most first ranks** counts a candidate once for every ballot that has it in the first rank group, also when it shares that group.
+- **Head-to-head** moves the candidate who beats all other tied candidates to the top and the one who loses to all of them to the bottom, and repeats. The rest stay tied.
 
 No seed and no randomness beacon is used. Every tie-break is recomputable from the manifest and the published ballots alone, and each applied rule appears as a tie-break event in the trace.
 
@@ -367,4 +385,5 @@ After v1: mixnet profile, SAML and BundID, threshold decryption, blind BLS and p
 - **Tie-breaking.** Non-random only: a chain of ballot-derived or fixed rules chosen at election creation. No seed, no external beacon.
 - **Trustee key setup.** None in v1: the election key is published at the close, and early decryption is prevented by business logic.
 - **Multi-winner elections.** Both the Schulze ranking and single transferable vote in v1.
+- **Tally rules.** Winning votes as pairwise strength; Droop quota and weighted inclusive Gregory transfers for single transferable vote; equal ranks split a ballot's weight. Details are in section 8.
 - **Existing systems.** Belenios was reviewed from source (4.0.0\~dev, November 2026) and is not used as a base: its credential authority knows the voter-to-credential mapping, storage is file-based on a single node, there is no rank limit, no configurable tie-breaking and no receipt mode, and identity schemes are compiled-in OCaml modules. It remains the reference for the later mixnet profile, for the public archive and in-browser verification, and for the ranking UX of its booth. Its code is AGPL-3.0, so copying it would make the combined work AGPL; it is used as a reference only. Helios and Elekto are still to be studied before M3.
