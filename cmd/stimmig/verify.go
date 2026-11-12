@@ -56,6 +56,9 @@ func runVerify(args []string, stdout, stderr io.Writer) int {
 	log := rep.Log
 	p("election     %s", hex.EncodeToString(log.ElectionID[:]))
 	p("title        %s", log.Manifest.Title)
+	if log.Manifest.ClientHash != nil {
+		p("client hash  %s", hex.EncodeToString(log.Manifest.ClientHash))
+	}
 	p("entries      %d", log.Entries)
 	for i, typ := range publog.Types {
 		if log.Counts[i] > 0 {

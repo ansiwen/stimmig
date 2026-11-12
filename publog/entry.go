@@ -81,6 +81,9 @@ type Manifest struct {
 	// ReceiptKey is the ballot box's Ed25519 public key for receipts. It is
 	// present exactly in receipt mode full.
 	ReceiptKey []byte `cbor:"receipt_key,omitempty"`
+	// ClientHash is the hash of the voting client's bundle that the ballot
+	// box serves (ballotbox.ClientHash). It is optional.
+	ClientHash []byte `cbor:"client_hash,omitempty"`
 }
 
 // Algorithms names the algorithms of an election by versioned identifiers.
@@ -138,6 +141,9 @@ func (m Manifest) Validate() error {
 		return errors.New("publog: receipt key has the wrong size")
 	} else if !full && len(m.ReceiptKey) != 0 {
 		return errors.New("publog: receipt key in receipt mode none")
+	}
+	if len(m.ClientHash) != 0 && len(m.ClientHash) != merkle.HashSize {
+		return errors.New("publog: client hash has the wrong size")
 	}
 	return m.Tally.Validate()
 }

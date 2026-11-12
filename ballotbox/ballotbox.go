@@ -11,11 +11,14 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	_ "embed" // for the schema
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"github.com/ansiwen/stimmig/api"
 	"github.com/ansiwen/stimmig/ballot"
@@ -44,11 +47,17 @@ const (
 //	POST /v1/elections/{id}/close    admin   close the voting, publish the ballots
 //	POST /v1/elections/{id}/ballots  voter   cast a ballot
 //	GET  /v1/elections/{id}          public  phase and number of ballots cast
+//	GET  /v1/client                  public  hash of the voting client's bundle
+//	GET  /                           public  the voting client
 type Server struct {
 	DB *sql.DB
 	// Log is the log service, with the ballot box's writer token.
 	Log        *api.Client
 	AdminToken string
+	// ClientDir is the directory with the voting client's static bundle.
+	// If it is set, the ballot box serves the bundle at / and its hash at
+	// GET /v1/client.
+	ClientDir string
 }
 
 // Init creates the tables if they are missing.
@@ -66,6 +75,24 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/elections/{id}/close", api.Admin(s.AdminToken, s.close))
 	mux.HandleFunc("POST /v1/elections/{id}/ballots", api.Handle(s.cast))
 	mux.HandleFunc("GET /v1/elections/{id}", api.Handle(s.status))
+	if s.ClientDir != "" {
+		mux.HandleFunc("GET /v1/client", api.Handle(func(http.ResponseWriter, *http.Request) (any, error) {
+			hash, err := ClientHash(s.ClientDir)
+			return api.ClientBundle{Hash: hash}, err
+		}))
+		files := http.FileServer(http.Dir(s.ClientDir))
+		mux.Handle("GET /", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// The page holds the credential: it may load code only from
+			// this origin, and it may not be framed.
+			w.Header().Set("Content-Security-Policy",
+				"default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src https: http:; "+
+					"base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Header().Set("Referrer-Policy", "no-referrer")
+			w.Header().Set("Cache-Control", "no-cache")
+			files.ServeHTTP(w, r)
+		}))
+	}
 	return api.CORS(mux)
 }
 
@@ -317,4 +344,33 @@ func (s *Server) status(_ http.ResponseWriter, r *http.Request) (any, error) {
 		return nil, api.Errorf(http.StatusNotFound, "election not found")
 	}
 	return st, err
+}
+
+// ClientHash returns the hash of a client bundle: SHA-256 over the
+// canonical encoding of the array of [name, SHA-256 of the content] of all
+// files of the directory, sorted by name. The manifest publishes it, so
+// that anyone can compare the served client with a reproducible build.
+func ClientHash(dir string) ([]byte, error) {
+	entries, err := os.ReadDir(dir) // sorted by name
+	if err != nil {
+		return nil, err
+	}
+	var files []any
+	for _, e := range entries {
+		if e.IsDir() {
+			return nil, fmt.Errorf("ballotbox: the client bundle must be flat, but %s is a directory", e.Name())
+		}
+		data, err := os.ReadFile(filepath.Join(dir, e.Name())) //nolint:gosec // the directory is set by the operator
+		if err != nil {
+			return nil, err
+		}
+		sum := sha256.Sum256(data)
+		files = append(files, []any{e.Name(), sum[:]})
+	}
+	encoded, err := canon.Marshal(files)
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(encoded)
+	return sum[:], nil
 }

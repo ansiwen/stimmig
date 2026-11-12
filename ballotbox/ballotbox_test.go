@@ -6,9 +6,13 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ansiwen/stimmig/api"
@@ -274,5 +278,62 @@ func TestCloseAfterPublish(t *testing.T) {
 	rep, err := election.Verify(bytes.NewReader(export), nil)
 	if err != nil || rep.Phase != election.PhaseVotingClosed || rep.Log.Entries != 4 {
 		t.Fatalf("log: %+v, %v", rep, err)
+	}
+}
+
+func TestClientBundle(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("index.html", "<!doctype html><title>client</title>")
+	write("app.js", "// code")
+	h1, err := ClientHash(dir)
+	if err != nil || len(h1) != 32 {
+		t.Fatalf("hash %x, %v", h1, err)
+	}
+	if again, _ := ClientHash(dir); !bytes.Equal(again, h1) {
+		t.Fatal("the hash is not stable")
+	}
+
+	srv := httptest.NewServer((&Server{ClientDir: dir}).Handler())
+	defer srv.Close()
+	var bundle api.ClientBundle
+	if err := (&api.Client{Base: srv.URL}).Do(ctx, "GET", "/v1/client", nil, &bundle); err != nil || !bytes.Equal(bundle.Hash, h1) {
+		t.Fatalf("served hash %x, %v", bundle.Hash, err)
+	}
+	resp, err := http.Get(srv.URL + "/") //nolint:noctx // test
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	csp := resp.Header.Get("Content-Security-Policy")
+	if !strings.Contains(string(body), "<title>client</title>") || !strings.Contains(csp, "default-src 'self'") ||
+		!strings.Contains(csp, "frame-ancestors 'none'") || resp.Header.Get("Set-Cookie") != "" {
+		t.Fatalf("page: %s, headers %v", body, resp.Header)
+	}
+
+	// Any change of a file or a name changes the hash.
+	write("app.js", "// other code")
+	h2, _ := ClientHash(dir)
+	write("extra.js", "")
+	h3, _ := ClientHash(dir)
+	if bytes.Equal(h1, h2) || bytes.Equal(h2, h3) {
+		t.Fatal("the hash does not cover the bundle")
+	}
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ClientHash(dir); err == nil {
+		t.Fatal("nested bundle accepted")
+	}
+	// Without a client directory the ballot box serves no client.
+	bare := httptest.NewServer((&Server{}).Handler())
+	defer bare.Close()
+	if err := (&api.Client{Base: bare.URL}).Do(ctx, "GET", "/v1/client", nil, nil); !api.IsStatus(err, http.StatusNotFound) {
+		t.Fatalf("client hash without a bundle: %v", err)
 	}
 }

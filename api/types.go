@@ -90,3 +90,8 @@ type Status struct {
 	Phase string `cbor:"phase"`
 	Cast  uint64 `cbor:"cast"`
 }
+
+// ClientBundle is the response of GET /v1/client of the ballot box.
+type ClientBundle struct {
+	Hash []byte `cbor:"hash"`
+}

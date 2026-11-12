@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"net/http"
 	"os"
 	"strings"
 
@@ -151,6 +152,13 @@ func adminCreate(ctx context.Context, log, reg, box *api.Client, definitionPath 
 			return merkle.Hash{}, fmt.Errorf("ballot box: %w", err)
 		}
 		m.ReceiptKey = boxKey.ReceiptKey
+	}
+	// The hash of the voting client, if the ballot box serves one.
+	var bundle api.ClientBundle
+	if err := box.Do(ctx, "GET", "/v1/client", nil, &bundle); err == nil {
+		m.ClientHash = bundle.Hash
+	} else if !api.IsStatus(err, http.StatusNotFound) {
+		return merkle.Hash{}, fmt.Errorf("ballot box: %w", err)
 	}
 	var head publog.TreeHead
 	if err := log.Do(ctx, "POST", "/v1/elections", m, &head); err != nil {

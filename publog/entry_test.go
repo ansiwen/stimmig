@@ -73,6 +73,7 @@ func TestManifestValidate(t *testing.T) {
 		"receipt mode": func(m *Manifest) { m.ReceiptMode = "maybe" },
 		"receipt alg":  func(m *Manifest) { m.Algorithms.ReceiptSignature = "" },
 		"receipt key":  func(m *Manifest) { m.ReceiptKey = nil },
+		"client hash":  func(m *Manifest) { m.ClientHash = []byte{1, 2, 3} },
 		"issuing key":  func(m *Manifest) { m.IssuingKey = m.IssuingKey[1:] },
 		"election key": func(m *Manifest) { m.ElectionKey = m.ElectionKey[:64] },
 		"none with receipt key": func(m *Manifest) {
