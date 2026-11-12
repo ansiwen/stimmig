@@ -142,7 +142,10 @@ func TestElectionFromCommandLine(t *testing.T) {
 	// An election with receipts.
 	def := write("election.json", `{"title": "Board election", "tally": {"candidates": ["A", "B", "C"], "method": "schulze", "max_ranks": 2}}`)
 	id := strings.TrimSpace(stimmig(t, 0, "admin", "create", "-definition", def))
-	stimmig(t, 0, "admin", "roll", "-election", id, "-voters", voters)
+	// 19 rankings of 3 candidates in up to 2 ranks, for 3 voters.
+	if out := stimmig(t, 0, "admin", "roll", "-election", id, "-voters", voters); !strings.Contains(out, "warning: 19 different ballots") {
+		t.Fatalf("no fingerprint warning: %s", out)
+	}
 	ada, bob := register(id, "ada@example.org"), register(id, "bob@example.org")
 	stimmig(t, 1, "client", "register", "-state", ada, "-election", id, "-log", logSrv.URL, "-registrar", regSrv.URL)
 	stimmig(t, 1, "admin", "open-voting", "-election", id) // registration is still open
@@ -189,9 +192,12 @@ func TestElectionFromCommandLine(t *testing.T) {
 
 	// An election without receipts: after casting, the client keeps
 	// neither the credential nor the ballot.
-	def = write("none.json", `{"title": "Secret poll", "receipt_mode": "none", "tally": {"candidates": ["yes", "no"], "method": "borda"}}`)
+	def = write("none.json", `{"title": "Secret poll", "receipt_mode": "none", "tally": {"candidates": ["yes", "no"], "method": "borda", "max_ranks": 1, "no_equal_ranks": true}}`)
 	id = strings.TrimSpace(stimmig(t, 0, "admin", "create", "-definition", def))
-	stimmig(t, 0, "admin", "roll", "-election", id, "-voters", voters)
+	// Two possible ballots, yes and no, for 3 voters: no warning.
+	if out := stimmig(t, 0, "admin", "roll", "-election", id, "-voters", voters); strings.Contains(out, "warning") {
+		t.Fatalf("unexpected warning: %s", out)
+	}
 	// Cleo's client stops before she opens the link. The credential is
 	// issued when she opens it, and the client picks it up when it runs
 	// again, because the state file holds the pending registration.

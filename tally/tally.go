@@ -9,6 +9,7 @@ package tally
 import (
 	"errors"
 	"fmt"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -287,6 +288,43 @@ func newElection(m Manifest) (*election, error) {
 		Pairwise:   e.d,
 	}
 	return e, nil
+}
+
+// PossibleBallots returns the number of different valid ballots of an
+// election. If it exceeds the number of voters, a ranking can work as a
+// fingerprint that identifies a ballot (SPEC.md section 2).
+func (m Manifest) PossibleBallots() (*big.Int, error) {
+	e, err := newElection(m)
+	if err != nil {
+		return nil, err
+	}
+	// ways[r] is the number of ways to fill the ranks counted so far when r
+	// candidates are still unranked.
+	ways := make([]*big.Int, e.n+1)
+	for r := range ways {
+		ways[r] = big.NewInt(1)
+	}
+	total := new(big.Int)
+	if m.AllowEmpty {
+		total.SetInt64(1)
+	}
+	for rank := 1; rank <= e.maxRanks; rank++ {
+		next := make([]*big.Int, e.n+1)
+		for r := range next {
+			next[r] = new(big.Int)
+			// The first of the ranks takes size candidates of the r.
+			for size := 1; size <= r; size++ {
+				if size > 1 && m.NoEqualRanks {
+					break
+				}
+				c := new(big.Int).Binomial(int64(r), int64(size))
+				next[r].Add(next[r], c.Mul(c, ways[r-size]))
+			}
+		}
+		ways = next
+		total.Add(total, ways[e.n])
+	}
+	return total, nil
 }
 
 // parse validates a ballot and converts it to candidate indexes.

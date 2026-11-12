@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -9,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math/big"
 	"os"
 	"strings"
 
@@ -79,7 +81,10 @@ func runAdmin(args []string, stdout, stderr io.Writer) int {
 			if err != nil {
 				return err
 			}
-			return reg.Do(ctx, "PUT", path+"/roll", roll, nil)
+			if err := reg.Do(ctx, "PUT", path+"/roll", roll, nil); err != nil {
+				return err
+			}
+			return warnFingerprint(ctx, log, id, len(roll.Voters), stderr)
 		case "close-registration":
 			return reg.Do(ctx, "POST", path+"/close", nil, nil)
 		case "open-voting":
@@ -175,4 +180,27 @@ func readVoters(path string) (api.Roll, error) {
 		}
 	}
 	return roll, sc.Err()
+}
+
+// warnFingerprint warns when the election allows more different ballots
+// than it has voters: a ranking can then work as a fingerprint that
+// identifies a ballot (SPEC.md section 2).
+func warnFingerprint(ctx context.Context, log *api.Client, id merkle.Hash, voters int, stderr io.Writer) error {
+	export, err := api.Export(ctx, log, id)
+	if err != nil {
+		return err
+	}
+	rep, err := publog.Verify(bytes.NewReader(export), nil)
+	if err != nil {
+		return err
+	}
+	possible, err := rep.Manifest.Tally.PossibleBallots()
+	if err != nil {
+		return err
+	}
+	if possible.Cmp(big.NewInt(int64(voters))) > 0 {
+		_, _ = fmt.Fprintf(stderr, "warning: %s different ballots are possible, but only %d voters are eligible. "+
+			"A voter can make a ballot recognisable by an unusual ranking. Consider a lower max_ranks.\n", possible, voters)
+	}
+	return nil
 }

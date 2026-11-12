@@ -2,10 +2,12 @@ package tally
 
 import (
 	"encoding/json"
+	"fmt"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -342,4 +344,50 @@ func FuzzTally(f *testing.F) {
 			t.Fatalf("valid %d + invalid %d != %d", res.Valid, len(res.Invalid), len(b))
 		}
 	})
+}
+
+func TestPossibleBallots(t *testing.T) {
+	abc := []string{"A", "B", "C"}
+	cases := []struct {
+		m    Manifest
+		want int64
+	}{
+		// A, B, A=B, A>B, B>A.
+		{Manifest{Candidates: abc[:2], Method: Schulze}, 5},
+		{Manifest{Candidates: abc[:2], Method: Schulze, AllowEmpty: true}, 6},
+		// A, B, A>B, B>A.
+		{Manifest{Candidates: abc[:2], Method: Schulze, NoEqualRanks: true}, 4},
+		// One rank: every non-empty subset.
+		{Manifest{Candidates: abc, Method: Schulze, MaxRanks: 1}, 7},
+		// 3 single choices and 6 ordered pairs.
+		{Manifest{Candidates: abc, Method: Schulze, MaxRanks: 2, NoEqualRanks: true}, 9},
+		// 3 + 6 + 6 strict rankings of every length.
+		{Manifest{Candidates: abc, Method: Schulze, NoEqualRanks: true}, 15},
+		// 7 with one rank, 12 with two (3*2 splits of 3, 3*2 of 2), 6 with three.
+		{Manifest{Candidates: abc, Method: Schulze}, 25},
+	}
+	for _, c := range cases {
+		got, err := c.m.PossibleBallots()
+		if err != nil || got.Int64() != c.want {
+			t.Errorf("%+v: got %v, %v, want %d", c.m, got, err, c.want)
+		}
+	}
+	if _, err := (Manifest{}).PossibleBallots(); err == nil {
+		t.Error("invalid manifest accepted")
+	}
+	// The count agrees with an enumeration through random ballots.
+	r := rand.New(rand.NewSource(4))
+	m := Manifest{Candidates: []string{"A", "B", "C", "D"}, Method: Schulze, MaxRanks: 3}
+	seen := map[string]bool{}
+	for i := 0; i < 20000; i++ {
+		for _, b := range randomBallots(r, m.Candidates, m.MaxRanks, 1) {
+			for _, g := range b {
+				sort.Strings(g)
+			}
+			seen[fmt.Sprint(b)] = true
+		}
+	}
+	if got, _ := m.PossibleBallots(); got.Int64() != int64(len(seen)) {
+		t.Errorf("counted %v ballots, enumerated %d", got, len(seen))
+	}
 }
