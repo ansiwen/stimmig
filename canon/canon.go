@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 
 	"github.com/fxamacker/cbor/v2"
@@ -149,4 +150,32 @@ func jsonValue(v any) any {
 	default:
 		return v
 	}
+}
+
+// Raw is one canonical item that is kept as encoded.
+type Raw = cbor.RawMessage
+
+// SequenceReader reads a CBOR sequence (RFC 8742) of canonical items.
+type SequenceReader struct {
+	dec *cbor.Decoder
+}
+
+// NewSequenceReader returns a reader for the items in r.
+func NewSequenceReader(r io.Reader) *SequenceReader {
+	return &SequenceReader{dec: decMode.NewDecoder(r)}
+}
+
+// Next returns the next item, or io.EOF after the last one.
+func (s *SequenceReader) Next() ([]byte, error) {
+	var raw cbor.RawMessage
+	if err := s.dec.Decode(&raw); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, io.EOF
+		}
+		return nil, fmt.Errorf("canon: %w", err)
+	}
+	if err := Check(raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }

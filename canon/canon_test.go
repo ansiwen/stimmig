@@ -3,6 +3,8 @@ package canon
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 )
@@ -126,4 +128,26 @@ func FuzzCheck(f *testing.F) {
 			t.Fatalf("ToJSON: %v", err)
 		}
 	})
+}
+
+func TestSequenceReader(t *testing.T) {
+	a, _ := Marshal([]int{1, 2})
+	b, _ := Marshal("x")
+	r := NewSequenceReader(bytes.NewReader(append(append([]byte{}, a...), b...)))
+	for _, want := range [][]byte{a, b} {
+		got, err := r.Next()
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("got %x, %v, want %x", got, err, want)
+		}
+	}
+	if _, err := r.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("want io.EOF, got %v", err)
+	}
+	// A non-canonical item and a truncated item are errors, not EOF.
+	for _, h := range []string{"1817", "8301"} {
+		data, _ := hex.DecodeString(h)
+		if _, err := NewSequenceReader(bytes.NewReader(data)).Next(); err == nil || errors.Is(err, io.EOF) {
+			t.Errorf("%s: got %v", h, err)
+		}
+	}
 }
