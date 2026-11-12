@@ -39,10 +39,23 @@ type State struct {
 	CredentialSignature []byte `json:"credential_signature,omitempty"`
 	// RollReference is the voter's entry in the public roll.
 	RollReference []byte `json:"roll_reference,omitempty"`
+	// Pending is a registration that has started and not finished.
+	Pending *Pending `json:"pending,omitempty"`
 	// Ballot is the encoded ballot that was cast, and Receipt the ballot
 	// box's receipt for it.
 	Ballot  []byte `json:"ballot,omitempty"`
 	Receipt []byte `json:"receipt,omitempty"`
+}
+
+// Pending is a started registration. With it, the client can finish the
+// registration after it was interrupted, for example by a page reload.
+type Pending struct {
+	// Seed derives the blinding of the credential.
+	Seed          []byte `json:"seed"`
+	CredentialKey []byte `json:"credential_key"`
+	Blinded       []byte `json:"blinded"`
+	Session       string `json:"session"`
+	LoginURL      string `json:"login_url"`
 }
 
 // PollInterval is the pause between two requests for the credential while
@@ -71,42 +84,84 @@ func (st *State) log(ctx context.Context) (*election.Report, error) {
 	return rep, nil
 }
 
-// Register obtains the voting credential. It creates the credential key,
-// sends the blinded credential to the registrar, calls login with the URL
-// where the voter authenticates, waits until the voter has done so, and
-// stores the unblinded credential in the state.
-func Register(ctx context.Context, st *State, login func(loginURL string) error) error {
-	if st.CredentialSignature != nil {
-		return errors.New("client: this state already holds a credential")
-	}
+// request rebuilds the credential request of a pending registration.
+func (st *State) request(ctx context.Context) (*credential.Request, error) {
 	rep, err := st.log(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// Manifest.Validate has checked the issuing key during verification.
 	issuingKey, err := credential.ParseIssuingKey(rep.Log.Manifest.IssuingKey)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	p := st.Pending
+	pub, ok := ed25519.PrivateKey(p.CredentialKey).Public().(ed25519.PublicKey)
+	if !ok || len(p.CredentialKey) != ed25519.PrivateKeySize {
+		return nil, errors.New("client: malformed credential key")
+	}
+	req, err := credential.NewRequestFromSeed(p.Seed, issuingKey, st.id(), pub)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	req, err := credential.NewRequest(rand.Reader, issuingKey, st.id(), pub)
+	if p.Blinded != nil && !bytes.Equal(p.Blinded, req.Blinded) {
+		return nil, errors.New("client: the stored registration cannot be resumed with this version of the client")
+	}
+	p.Blinded = req.Blinded
+	return req, nil
+}
+
+// Begin starts the registration: it creates the credential key, sends the
+// blinded credential to the registrar and returns the URL where the voter
+// logs in. The caller must store the state before it shows that URL, and
+// then call Complete.
+//
+// If the state holds a pending registration, Begin continues it with a new
+// session for the same credential. That is safe to repeat: the registrar
+// issues one credential per voter and answers the same blinded credential
+// with the same signature.
+func Begin(ctx context.Context, st *State) (loginURL string, err error) {
+	if st.CredentialSignature != nil {
+		return "", errors.New("client: this state already holds a credential")
+	}
+	if st.Pending == nil {
+		_, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return "", err
+		}
+		seed := make([]byte, credential.SeedSize)
+		if _, err := rand.Read(seed); err != nil {
+			return "", err
+		}
+		st.Pending = &Pending{Seed: seed, CredentialKey: priv}
+	}
+	req, err := st.request(ctx)
+	if err != nil {
+		return "", err
+	}
+	var session api.Session
+	if err := (&api.Client{Base: st.RegistrarURL}).Do(ctx, "POST", api.ElectionPath(st.id())+"/sessions", api.SessionRequest{Blinded: req.Blinded}, &session); err != nil {
+		return "", err
+	}
+	st.Pending.Session, st.Pending.LoginURL = session.Session, session.URL
+	return session.URL, nil
+}
+
+// Complete waits until the voter has logged in, then unblinds and verifies
+// the credential and stores it in the state. It returns when the context
+// ends; the registration stays pending and Complete can be called again.
+func Complete(ctx context.Context, st *State) error {
+	if st.Pending == nil || st.Pending.Session == "" {
+		return errors.New("client: no registration has started")
+	}
+	req, err := st.request(ctx)
 	if err != nil {
 		return err
 	}
 	registrar := &api.Client{Base: st.RegistrarURL}
-	var session api.Session
-	if err := registrar.Do(ctx, "POST", api.ElectionPath(st.id())+"/sessions", api.SessionRequest{Blinded: req.Blinded}, &session); err != nil {
-		return err
-	}
-	if err := login(session.URL); err != nil {
-		return err
-	}
 	var cred api.Credential
 	for {
-		err := registrar.Do(ctx, "GET", "/v1/sessions/"+session.Session, nil, &cred)
+		err := registrar.Do(ctx, "GET", "/v1/sessions/"+st.Pending.Session, nil, &cred)
 		if err == nil {
 			break
 		}
@@ -123,7 +178,8 @@ func Register(ctx context.Context, st *State, login func(loginURL string) error)
 	if err != nil {
 		return err
 	}
-	st.CredentialKey, st.CredentialSignature, st.RollReference = priv, sig, cred.RollReference
+	st.CredentialKey, st.CredentialSignature, st.RollReference = st.Pending.CredentialKey, sig, cred.RollReference
+	st.Pending = nil
 	return nil
 }
 

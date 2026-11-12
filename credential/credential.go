@@ -14,6 +14,8 @@ package credential
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/x509"
@@ -129,6 +131,30 @@ func NewRequest(random io.Reader, issuingKey *rsa.PublicKey, electionID merkle.H
 		return nil, err
 	}
 	return &Request{Blinded: blinded, client: client, state: state, message: msg}, nil
+}
+
+// SeedSize is the size of the seed of NewRequestFromSeed.
+const SeedSize = 32
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
+}
+
+// NewRequestFromSeed is NewRequest with all randomness derived from a
+// secret seed, so that the same seed gives the same request again. A
+// client stores the seed before it contacts the registrar and can then
+// finish an issuance after it was interrupted. The seed must be random,
+// secret and used for one credential only.
+func NewRequestFromSeed(seed []byte, issuingKey *rsa.PublicKey, electionID merkle.Hash, credentialKey ed25519.PublicKey) (*Request, error) {
+	block, err := aes.NewCipher(seed)
+	if err != nil || len(seed) != SeedSize {
+		return nil, errors.New("credential: the seed must have 32 bytes")
+	}
+	stream := cipher.StreamReader{S: cipher.NewCTR(block, make([]byte, aes.BlockSize)), R: zeroReader{}}
+	return NewRequest(stream, issuingKey, electionID, credentialKey)
 }
 
 // Finalize unblinds the registrar's answer and verifies the resulting

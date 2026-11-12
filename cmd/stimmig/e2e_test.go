@@ -192,7 +192,21 @@ func TestElectionFromCommandLine(t *testing.T) {
 	def = write("none.json", `{"title": "Secret poll", "receipt_mode": "none", "tally": {"candidates": ["yes", "no"], "method": "borda"}}`)
 	id = strings.TrimSpace(stimmig(t, 0, "admin", "create", "-definition", def))
 	stimmig(t, 0, "admin", "roll", "-election", id, "-voters", voters)
+	// Cleo's client stops before she opens the link. The credential is
+	// issued when she opens it, and the client picks it up when it runs
+	// again, because the state file holds the pending registration.
+	cleoState := filepath.Join(dir, id[:8]+"cleo@example.org.json")
+	stimmig(t, 1, "client", "register", "-state", cleoState, "-election", id, "-timeout", "300ms",
+		"-log", logSrv.URL, "-registrar", regSrv.URL, "-ballotbox", boxSrv.URL, "-email", "cleo@example.org")
+	resp, err := http.Get(mails.take(t, "cleo@example.org")) //nolint:noctx // test
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
 	cleo := register(id, "cleo@example.org")
+	if cleo != cleoState {
+		t.Fatal("test uses two state files")
+	}
 	stimmig(t, 0, "admin", "close-registration", "-election", id)
 	stimmig(t, 0, "admin", "open-voting", "-election", id)
 	stimmig(t, 0, "client", "cast", "-state", cleo, "-ranking", "yes")

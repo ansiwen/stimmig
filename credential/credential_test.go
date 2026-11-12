@@ -171,3 +171,43 @@ func TestSmallPrimes(t *testing.T) {
 		t.Fatalf("smallPrimes = %s, want %s", smallPrimes, want)
 	}
 }
+
+// The same seed gives the same request, and that request finishes an
+// issuance that another instance started.
+func TestRequestFromSeed(t *testing.T) {
+	sk := issuingKey()
+	id := merkle.LeafHash([]byte("election"))
+	cred := newCredential(t)
+	seed := bytes.Repeat([]byte{9}, SeedSize)
+	first, err := NewRequestFromSeed(seed, &sk.PublicKey, id, cred)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blindSig, err := Issue(sk, first.Blinded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 50; i++ {
+		again, err := NewRequestFromSeed(seed, &sk.PublicKey, id, cred)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(again.Blinded, first.Blinded) {
+			t.Fatalf("run %d: the request differs", i)
+		}
+		sig, err := again.Finalize(blindSig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := Verify(&sk.PublicKey, id, cred, sig); err != nil {
+			t.Fatal(err)
+		}
+	}
+	other, _ := NewRequestFromSeed(bytes.Repeat([]byte{8}, SeedSize), &sk.PublicKey, id, cred)
+	if bytes.Equal(other.Blinded, first.Blinded) {
+		t.Fatal("another seed gives the same request")
+	}
+	if _, err := NewRequestFromSeed(seed[:16], &sk.PublicKey, id, cred); err == nil {
+		t.Fatal("short seed accepted")
+	}
+}

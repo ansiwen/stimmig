@@ -50,25 +50,36 @@ func runClient(args []string, stdout, stderr io.Writer) int {
 		ctx := context.Background()
 		switch args[0] {
 		case "register":
-			if _, err := os.Stat(*statePath); err == nil {
-				return errors.New("the state file exists already; a credential cannot be issued twice")
+			// An interrupted registration continues from its state file.
+			if err := readJSON(*statePath, &st); errors.Is(err, os.ErrNotExist) {
+				id, err := api.ParseHash(*electionFlag)
+				if err != nil {
+					return fmt.Errorf("-election: %w", err)
+				}
+				st = client.State{LogURL: *logURL, RegistrarURL: *registrarURL, BallotBoxURL: *ballotBoxURL, ElectionID: id[:]}
+			} else if err != nil {
+				return err
 			}
-			id, err := api.ParseHash(*electionFlag)
-			if err != nil {
-				return fmt.Errorf("-election: %w", err)
-			}
-			st = client.State{LogURL: *logURL, RegistrarURL: *registrarURL, BallotBoxURL: *ballotBoxURL, ElectionID: id[:]}
 			ctx, cancel := context.WithTimeout(ctx, *timeout)
 			defer cancel()
-			err = client.Register(ctx, &st, func(loginURL string) error {
-				if *email == "" {
-					_, _ = fmt.Fprintf(stdout, "Open this URL to log in:\n%s\n", loginURL)
-					return nil
+			loginURL, err := client.Begin(ctx, &st)
+			if err != nil {
+				return err
+			}
+			// Store the key and the blinding before the voter logs in: the
+			// credential is issued once and needs them.
+			if err := saveState(*statePath, &st); err != nil {
+				return err
+			}
+			if *email == "" {
+				_, _ = fmt.Fprintf(stdout, "Open this URL to log in:\n%s\n", loginURL)
+			} else {
+				if err := client.SubmitEmail(ctx, loginURL, *email); err != nil {
+					return err
 				}
 				_, _ = fmt.Fprintf(stdout, "A login link is on its way to %s. Open it to continue.\n", *email)
-				return client.SubmitEmail(ctx, loginURL, *email)
-			})
-			if err != nil {
+			}
+			if err := client.Complete(ctx, &st); err != nil {
 				return err
 			}
 			_, _ = fmt.Fprintf(stdout, "Credential received. Your entry in the public roll is %s.\n", hex.EncodeToString(st.RollReference))
