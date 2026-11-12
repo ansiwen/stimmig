@@ -184,6 +184,8 @@ func Tally(m Manifest, ballots []Ballot) (*Result, error) {
 		e.copeland()
 	case Borda:
 		e.borda()
+	case IRV, STV:
+		e.transfer()
 	}
 	return e.res, nil
 }

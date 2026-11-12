@@ -1,0 +1,11 @@
+{
+  "description": "Two seats, 12 votes, quota 5. A is elected with exactly 5. B and D tie for last with 2; first ranks are equal, second ranks are B 5, D 3, so D is eliminated. D's votes move to C, who reaches the quota.",
+  "manifest": {"candidates": ["A", "B", "C", "D"], "method": "stv", "seats": 2},
+  "ballots": [
+    {"count": 5, "ranking": [["A"],["B"]]},
+    {"count": 2, "ranking": [["B"]]},
+    {"count": 3, "ranking": [["C"],["D"]]},
+    {"count": 2, "ranking": [["D"],["C"]]}
+  ],
+  "expect": {"winners": ["A", "C"], "ranking": [["A"],["C"],["B"],["D"]], "tie_break_rules": ["first-ranks"]}
+}

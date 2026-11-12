@@ -1,0 +1,11 @@
+{
+  "description": "Equal ranks split a ballot. Round 1: A 2, B 2, C 3 (the two A=B ballots give 1 to each). A and B tie for last; first ranks are A 3, B 3, second ranks A 0, B 4, so A is eliminated. Round 2: B 4, C 3. B wins.",
+  "manifest": {"candidates": ["A", "B", "C"], "method": "irv"},
+  "ballots": [
+    {"count": 2, "ranking": [["A","B"]]},
+    {"count": 1, "ranking": [["A"],["B"]]},
+    {"count": 1, "ranking": [["B"]]},
+    {"count": 3, "ranking": [["C"],["B"]]}
+  ],
+  "expect": {"winners": ["B"], "ranking": [["B"],["C"],["A"]], "tie_break_rules": ["first-ranks"]}
+}

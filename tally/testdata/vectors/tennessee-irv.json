@@ -1,0 +1,6 @@
+{
+  "description": "Tennessee capital example: Memphis, Nashville, Chattanooga, Knoxville. Nashville is the Condorcet winner. Instant runoff eliminates C, then N, and Knoxville wins 58 to 42.",
+  "manifest": {"candidates": ["M", "N", "C", "K"], "method": "irv"},
+  "ballots": [{"count":42,"ranking":[["M"],["N"],["C"],["K"]]},{"count":26,"ranking":[["N"],["C"],["K"],["M"]]},{"count":15,"ranking":[["C"],["K"],["N"],["M"]]},{"count":17,"ranking":[["K"],["C"],["N"],["M"]]}],
+  "expect": {"winners": ["K"], "ranking": [["K"],["M"],["N"],["C"]]}
+}

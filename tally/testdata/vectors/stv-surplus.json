@@ -1,0 +1,10 @@
+{
+  "description": "Two seats, 12 votes, quota 5. A has 8 and is elected; the surplus 3 moves at factor 3/8 to B, who then has 4 against C's 3. C is eliminated and B takes the last seat.",
+  "manifest": {"candidates": ["A", "B", "C"], "method": "stv", "seats": 2},
+  "ballots": [
+    {"count": 8, "ranking": [["A"],["B"]]},
+    {"count": 1, "ranking": [["B"]]},
+    {"count": 3, "ranking": [["C"]]}
+  ],
+  "expect": {"winners": ["A", "B"], "ranking": [["A"],["B"],["C"]]}
+}
