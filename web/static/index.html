@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Stimmig</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1 id="title">Stimmig</h1>
+  <nav aria-label="Language / Sprache">
+    <button type="button" id="lang-en" lang="en">English</button>
+    <button type="button" id="lang-de" lang="de">Deutsch</button>
+  </nav>
+</header>
+<main>
+  <p id="status" role="status" aria-live="polite"></p>
+  <p id="error" role="alert" hidden></p>
+
+  <section id="info" hidden>
+    <p id="phase"></p>
+    <details>
+      <summary data-t="trustTitle"></summary>
+      <ul>
+        <li data-t="trust1"></li>
+        <li data-t="trust2"></li>
+        <li data-t="trust3"></li>
+        <li data-t="trust4"></li>
+      </ul>
+    </details>
+  </section>
+
+  <section id="register" hidden aria-labelledby="register-h">
+    <h2 id="register-h" data-t="registerTitle"></h2>
+    <p data-t="registerText"></p>
+    <button type="button" id="begin" data-t="begin"></button>
+    <p id="login" hidden>
+      <a id="login-link" target="_blank" rel="noopener" data-t="loginLink"></a><br>
+      <span data-t="loginWait"></span>
+    </p>
+  </section>
+
+  <section id="vote" hidden aria-labelledby="vote-h">
+    <h2 id="vote-h" data-t="voteTitle"></h2>
+    <p id="vote-rules"></p>
+    <h3 data-t="ranked"></h3>
+    <p id="ranked-empty" data-t="rankedEmpty"></p>
+    <ol id="ranked"></ol>
+    <h3 data-t="unranked"></h3>
+    <p data-t="unrankedText"></p>
+    <ul id="unranked"></ul>
+    <button type="button" id="review" data-t="review"></button>
+  </section>
+
+  <section id="confirm" hidden aria-labelledby="confirm-h">
+    <h2 id="confirm-h" data-t="confirmTitle"></h2>
+    <ol id="confirm-ranking"></ol>
+    <p id="confirm-unranked"></p>
+    <p data-t="confirmText"></p>
+    <button type="button" id="cast" data-t="cast"></button>
+    <button type="button" id="change" data-t="change"></button>
+  </section>
+
+  <section id="done" hidden aria-labelledby="done-h">
+    <h2 id="done-h" data-t="doneTitle"></h2>
+    <p id="done-text"></p>
+    <button type="button" id="check" data-t="check"></button>
+    <div id="check-result"></div>
+  </section>
+
+  <section id="backup" hidden aria-labelledby="backup-h">
+    <h2 id="backup-h" data-t="backupTitle"></h2>
+    <p data-t="backupText"></p>
+    <label for="passphrase" data-t="passphrase"></label>
+    <input id="passphrase" type="password" autocomplete="off" minlength="8">
+    <button type="button" id="export" data-t="export"></button>
+    <label for="import-file" data-t="import"></label>
+    <input id="import-file" type="file" accept=".stimmig">
+  </section>
+</main>
+<script src="wasm_exec.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
