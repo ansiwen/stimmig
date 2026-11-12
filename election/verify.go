@@ -41,6 +41,8 @@ type Report struct {
 	// Ballots holds the ballot entries and BallotIndexes their log indexes.
 	Ballots       []Ballot
 	BallotIndexes []uint64
+	// ElectionPrivateKey is the published private key, once it is logged.
+	ElectionPrivateKey []byte
 }
 
 // Verify checks a log export end to end (SPEC.md section 12):
@@ -88,7 +90,6 @@ type verifier struct {
 	roll        map[merkle.Hash]bool // roll reference to "credential issued"
 	credentials map[merkle.Hash]bool // credential keys that voted
 	lastLeaf    merkle.Hash
-	private     []byte
 	plains      uint64
 	rankings    []tally.Ballot
 }
@@ -228,14 +229,14 @@ func (v *verifier) entry(log *publog.Report, index uint64, typ string, body []by
 		if err := ballot.MatchElectionKey(log.Manifest.ElectionKey, k.PrivateKey); err != nil {
 			return err
 		}
-		v.private = k.PrivateKey
+		v.rep.ElectionPrivateKey = k.PrivateKey
 		v.rep.Phase = PhaseTallying
 
 	case publog.TypeBallotPlain:
 		if v.plains >= v.rep.Cast {
 			return errors.New("more ballot_plain entries than ballots")
 		}
-		want, err := openBallot(id, v.private, v.rep.BallotIndexes[v.plains], v.rep.Ballots[v.plains])
+		want, err := openBallot(id, v.rep.ElectionPrivateKey, v.rep.BallotIndexes[v.plains], v.rep.Ballots[v.plains])
 		if err != nil {
 			return err
 		}
