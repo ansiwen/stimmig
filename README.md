@@ -11,7 +11,8 @@ The project follows the milestones of SPEC.md section 13.
 | --- | --- |
 | M0: Repository | Done |
 | M1: Tally library | Done |
-| M2 to M8 | Not started |
+| M2: Log | Done; the log is in memory until the services arrive in M4 |
+| M3 to M8 | Not started |
 
 ## Tally
 
@@ -51,14 +52,32 @@ and tie-break events.
 The exact rules of every method and of the tie-break chain are in
 [SPEC.md](SPEC.md) section 8.
 
-### Tests
+## Log and verifier
+
+The package `publog` implements the public log: canonically encoded entries
+in a Merkle tree, signed tree heads, inclusion and consistency proofs, and
+the export format. The packages `canon` and `merkle` hold the deterministic
+CBOR encoding and the tree. The formats are in [SPEC.md](SPEC.md) section 7.
+
+```bash
+go run ./cmd/stimmig verify publog/testdata/export-v1.cbor
+```
+
+`verify` checks the structure of a log export: canonical encoding, entry
+types, the manifest, and the root and signature of every tree head. With
+`-json` it also prints every entry in its JSON rendering. The checks of
+issuance, ballots, decryption and tally follow with later milestones.
+
+## Tests
 
 ```bash
 go test ./...
 ```
 
-Test vectors are in `tally/testdata/vectors`. Their expected results were
-worked out by hand or taken from published examples, not from the library.
+Tally test vectors are in `tally/testdata/vectors`. Their expected results
+were worked out by hand or taken from published examples, not from the
+library. `publog/testdata/export-v1.cbor` is a log export for independent
+verifiers; it is signed with the fixed test key of `publog/entry_test.go`.
 
 ## Licence
 

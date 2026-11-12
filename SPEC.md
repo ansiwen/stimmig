@@ -201,6 +201,19 @@ Format rules:
 - The log serves inclusion proofs and consistency proofs between any two tree heads.
 - Roll references are salted hashes of the identity plugin's subject ID. Each voter can be told their own reference to check their roll entry and issuance status.
 
+Encoding details:
+
+- **Allowed CBOR subset.** Integers, byte strings, text strings, arrays, maps with text keys, booleans and null. Floating-point numbers, tags and indefinite-length items are forbidden. A reader rejects any item that is not in its single canonical encoding: shortest-form integers and lengths, map keys sorted bytewise by their encoding, no duplicate keys.
+- **Entry.** An entry is the array `[type, body]`. The type is the text from the table above and the body is a map. The leaf hash is SHA-256 over the byte `0x00` and the encoded entry; inner nodes hash the byte `0x01` and both children, as in RFC 6962.
+- **Election ID.** The election ID is the leaf hash of entry 0, the manifest. The manifest holds a random nonce of at least 16 bytes, so two elections with the same definition have different IDs.
+- **Manifest.** The body has the fields `version` (1), `title`, `nonce`, `tally` (candidates, method, seats, rank limit, ballot rules and tie-break chain of section 8), `algorithms` and `log_key`. Later milestones add the keys of the other services and the schedule. A reader rejects fields and algorithm identifiers it does not know.
+- **Algorithm identifiers.** `log_hash` is `sha256-rfc6962-v1` and `tree_head_signature` is `ed25519-v1`.
+- **Signed tree head.** A map with `election_id`, `size`, `root`, `timestamp` in seconds since the Unix epoch, and `signature`. The signature covers the canonical encoding of the array `["stimmig-tree-head-v1", election_id, size, root, timestamp]`. Timestamps never decrease from one tree head to the next.
+- **Export.** The export is a sequence of canonical items (RFC 8742), so it can be written and checked as a stream. The first item is the header `{"format": "stimmig-log-export-v1"}`. Each further item is a record, `["entry", entry]` or `["tree_head", tree head]`. Entries appear in log order, each tree head follows directly after the last entry it covers, and the last record is a tree head.
+- **JSON rendering.** Byte strings are shown as hexadecimal text. The rendering cannot be converted back.
+
+The verifier recomputes the root of every tree head from the entries of the export. This proves that all tree heads are consistent with each other without separate consistency proofs. Monitors that hold only tree heads use the consistency proofs of the log.
+
 Ballot entries are not public during voting. Where receipts are enabled, the receipt binds the ballot box to the leaf hash, and the entries appear at the close in leaf-hash order.
 
 Witness co-signing of tree heads by independent monitors is planned after v1.
@@ -380,6 +393,9 @@ After v1: mixnet profile, SAML and BundID, threshold decryption, blind BLS and p
 - **Project name.** Stimmig (German: "Stimme" is a vote, "stimmig" means coherent, it adds up). No voting product of that name was found in a web search on 2026-11-11.&#32;
 - **Licence.** EUPL-1.2.
 - **Canonical encoding.** Deterministic CBOR, with a JSON rendering for inspection.
+- **Log formats.** Entry, election ID, tree head and export formats are fixed in section 7. The election ID is the leaf hash of the manifest entry. The export is a streamable sequence in which tree heads follow the entries they cover.
+- **CBOR library.** The Go code uses `github.com/fxamacker/cbor/v2` and accepts only input that re-encodes to the same bytes. The golden export in `publog/testdata` was also checked with an independent Python implementation.
+- **Log storage.** M2 keeps the log in memory. PostgreSQL storage and the `log` service follow in M4 with the other services.
 - **Client crypto.** Browser Web Crypto first, Go compiled to WebAssembly as fallback.
 - **Lost credentials.** Not reissued, at least in v1.
 - **Tie-breaking.** Non-random only: a chain of ballot-derived or fixed rules chosen at election creation. No seed, no external beacon.
