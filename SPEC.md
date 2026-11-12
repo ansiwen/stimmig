@@ -1,0 +1,370 @@
+# Verifiable Ranked Voting Platform — Specification v0.1
+
+Nov 10, 2026 · @Sven Anderson
+
+## 1. Goals and non-goals
+
+The platform runs ranked-choice elections whose result anyone can recompute from public data, while no single party can link a ballot to a voter under the stated trust assumptions.
+
+Goals:
+
+- **Public counts.** Everyone sees the number of eligible voters, credentials handed out and ballots cast. The invariant is cast ≤ issued ≤ eligible.
+- **Universal verifiability.** All ballots are public after the close. A standalone verifier recomputes the result.
+- **Individual verifiability.** Each voter holds a receipt and can check that their ballot is in the public log.
+- **Ballot anonymity.** Hand-out and casting are cryptographically unlinkable.
+- **Several ranked methods.** Condorcet methods are the default; others plug into the same interface.
+- **Web application.** It works on desktop and mobile browsers without installation.
+- **Go, horizontally scalable.** Stateless services run as containers on Kubernetes.
+- **Open source.** The licence is EUPL-1.2.
+
+Desired, but not goals of the first version:
+
+- Coercion resistance and receipt-freeness, for example through a mixnet or other methods. v1 offers only the per-election receipt mode (section 5.5).
+- Suitability for legally binding public political elections.
+- Protection against compromised voter devices.
+
+These remain design targets: v1 decisions must not block them, and the assurance profiles (section 2) are the extension point.
+
+Never a goal:
+
+- Live results during voting. Only general statistics are published while voting is open, such as the number of ballots cast so far.
+
+## 2. Threat model and assurance profiles
+
+Each election declares an assurance profile in its manifest, and the voter interface states what that profile does and does not protect against. v1 ships profile A only.
+
+The security baseline is postal voting: v1 does not need to be more secure than mail-in ballots. Unsupervised voting is therefore accepted, as it is for postal votes.
+
+| Profile | Mechanism | Status |
+| --- | --- | --- |
+| A: Blind credentials | Blind-signed credential, anonymous casting, public log | v1 |
+| B: Mixnet | Encrypted ballots, verifiable shuffle, threshold decryption | Later |
+
+Trust assumptions for profile A:
+
+- Registrar and ballot box do not collude and do not share logs.
+- The operator does not use or reveal the election private key before the close. In v1 this is enforced by business logic, not by cryptography.
+- The voter's device and the delivered client code are honest.
+- At least one independent party monitors the public log.
+
+| Threat | v1 position |
+| --- | --- |
+| Vote selling or coercion using the receipt | Partly mitigated by receipt mode none (section 5.5); full protection needs profile B; stated to voters |
+| Linking by IP address | Separate origins, no IP logging at the ballot box, Tor-friendly; residual risk |
+| Linking by timing | Registration closes before voting opens (default); ballots are published only at the close |
+| Linking by browser state | No cookies or shared storage between registrar and ballot box |
+| Ranking used as a fingerprint | Configurable rank limit; admin warning when possible ballots exceed voters; residual risk in small electorates |
+| Registrar issues extra credentials | Every issuance is logged against a roll entry; voters can check their own entry; count is bounded by the roll |
+| Ballot box drops a ballot | The signed receipt is evidence; inclusion proof fails publicly |
+| Ballot box forges a ballot | Impossible without a credential private key |
+| Early results leak | Ballots are encrypted until the close; the operator is trusted not to decrypt early |
+| Malicious client code | Static bundle with published hash, reproducible build, independent verifier; residual risk |
+| Quantum adversary | Anonymity holds; forgery needs a quantum computer during the election (section 6) |
+| Very small electorate | Anonymity set equals the number of ballots cast; stated to the admin |
+| Registrar links a voter to their ballot | Blind signing: the registrar never sees the credential it signs, so it cannot match a roll entry to a ballot (section 5.1) |
+
+## 3. Components and roles
+
+The registrar and the ballot box are separate services on separate origins, so that neither alone can link a voter to a ballot.
+
+| Component | Responsibility | Knows |
+| --- | --- | --- |
+| Registrar | Authenticates voters through an identity plugin, blind-signs one credential per roll entry | Who registered; never which credential |
+| Ballot box | Accepts anonymous signed ballots, issues receipts | Credentials and ballots; never who |
+| Public log | Append-only Merkle log of all election events | Public data only |
+| Tally library | Pure Go package that computes results from ballots | Public data only |
+| Verifier CLI | Checks a log export end to end and recomputes the result | Public data only |
+| Trustees | Not used in v1; needed for threshold decryption in the mixnet profile | Nothing in v1 |
+| Election admin | Defines the manifest and the electoral roll | The roll |
+| Identity plugins | Map an external login to a stable subject ID | Login identity |
+| Web client | Generates keys, blinds, encrypts, signs, stores the credential and receipt | The voter's secrets, locally only |
+| Monitors | Third parties that mirror the log and check consistency | Public data only |
+
+## 4. Election lifecycle
+
+An election moves through seven phases, and each transition is itself an entry in the public log.
+
+1. **Setup.** The admin creates the manifest: candidates, method, tie-break rule, maximum ranks, assurance profile, algorithms and schedule. The service generates the election key pair. The manifest is log entry 0.
+2. **Roll publication.** The pseudonymous electoral roll is committed to the log: one opaque reference per eligible voter. This fixes the eligible count.
+3. **Registration (hand-out).** Voters authenticate and obtain a blind-signed credential. Each issuance is logged against its roll reference. By default this phase closes before voting opens.
+4. **Voting.** Voters submit encrypted, signed ballots anonymously and, if the election enables receipts, receive a signed receipt.
+5. **Close.** The ballot box publishes all ballots and the final tree head. The election private key is published.
+6. **Tally.** The result and its full trace are computed and logged.
+7. **Audit.** Anyone runs the verifier on the log export. Voters check their receipts. A dispute window is configurable.
+
+A registration deadline before voting is the default because it removes timing correlation. An election may allow overlapping registration and voting, at the cost of weaker anonymity, and the manifest records that choice.
+
+## 5. Protocol for profile A
+
+The voter's browser generates a credential key pair, the registrar blind-signs the public key, and the ballot box later accepts exactly one ballot signed by that key.
+
+### 5.1 Credential issuance
+
+1. The voter opens the voting client, a static page on the ballot-box origin. The client generates a credential key pair for this election and keeps it in local storage.
+2. The client computes the blinded form of `H(election_id, credential_public_key)` and redirects the voter to the registrar with the blinded value.
+3. The voter authenticates through an identity plugin. The registrar maps the login to a roll reference and checks that no credential has been issued for it.
+4. The registrar signs the blinded value with the election's issuing key, logs an `issuance` entry with the roll reference, and redirects back with the blind signature in the URL fragment.
+5. The client unblinds and verifies the signature, then stores the credential: private key, public key and registrar signature.
+
+The registrar sees only the blinded value. The ballot box sees no login. Before use, the client validates the issuing public key, because blindness depends on a well-formed key.
+
+Lost credentials cannot be reissued in v1. A reissue would either break the count invariant or require revoking a credential that the registrar cannot identify.
+
+### 5.2 Casting
+
+1. The client encodes the ranking and encrypts it to the election public key.
+2. The client signs `(election_id, ciphertext)` with the credential private key.
+3. The client sends credential public key, registrar signature, ciphertext and ballot signature to the ballot box, with no cookies or authentication.
+4. The ballot box verifies both signatures and that the credential has not voted, stores the ballot, and, in receipt mode full, returns a receipt: its signature over the election ID and the ballot's leaf hash.
+
+Re-voting is off by default: one ballot per credential. If an election enables it, the last ballot counts and all versions stay visible in the log.
+
+### 5.3 Close and decryption
+
+1. The ballot box appends all ballots to the public log, ordered by leaf hash so that arrival order is not revealed, and publishes the final signed tree head.
+2. The election private key is published in the log.
+3. Anyone checks that it matches the election public key and decrypts every ballot. Plaintext ballots are logged next to their ciphertexts.
+4. Malformed ballots are published and marked invalid with a reason; they are never silently dropped.
+
+### 5.4 Receipt check
+
+After the close, the client or any other tool requests an inclusion proof for the receipt's leaf hash against the final tree head. A valid receipt without a valid inclusion proof is public evidence of misbehaviour by the ballot box.
+
+### 5.5 Receipt mode
+
+Each election sets a receipt mode in its manifest, which trades proof of inclusion for the voter against protection from vote selling.
+
+| Mode | What the voter keeps | Voter can check own ballot | Voter can prove vote to others |
+| --- | --- | --- | --- |
+| `full` (default) | Signed receipt and credential | Yes | Yes |
+| `none` | Nothing: the ballot box issues no receipt, and the client deletes the credential key and all ballot data after casting | No | Not with the standard client |
+
+In mode `none` the voter relies on the public counts and on universal verification of the tally.
+
+Mode `none` stops casual vote selling but not a determined seller. A seller can run a modified client that keeps the credential key, or hand the credential to the buyer before voting. In profile A, any data that lets a voter find their ballot also lets them show it to others. Checking inclusion without being able to prove the vote requires profile B or a comparable method.
+
+## 6. Cryptography and algorithm agility
+
+Every algorithm is named by a versioned identifier in the manifest and fixed for the whole election; the verifier rejects identifiers it does not know.
+
+| Purpose | v1 default | Optional or later |
+| --- | --- | --- |
+| Credential blind signature | RSA blind signatures per [RFC 9474](https://www.rfc-editor.org/rfc/rfc9474), key of 3072 bits or more | Blind BLS as first alternative; later a public-registration scheme or a lattice blind signature |
+| Ballot signature | Ed25519 | ML-DSA, selectable per election |
+| Ballot encryption until close | ECDH key agreement on P-256 plus AES-GCM; the private key is published at the close | None needed |
+| Decryption proofs | None: anyone decrypts with the published key | None needed |
+| Log hashing | SHA-256 Merkle tree | None needed |
+| Tree head and receipt signatures | Ed25519 | ML-DSA, selectable per election |
+| Transport | TLS 1.3, hybrid post-quantum key exchange where the browser supports it | None needed |
+
+Post-quantum position:
+
+- **Anonymity.** RSA blinding hides the credential information-theoretically, so recorded traffic cannot be de-anonymised later. This statement is from general cryptographic knowledge and should be confirmed in the protocol review.
+- **Unforgeability.** A quantum attacker could forge credentials or Ed25519 signatures only by attacking during the election. Elections that want to exclude this can select ML-DSA for ballot and log signatures today.
+- **Ballot encryption.** Ballots are published in clear at the close, so there is no long-term secret to protect.
+- **Blind signature.** No post-quantum blind signature is standardised. Published lattice schemes are still research: one has signatures of about 22 KB ([Beullens et al.](https://eprint.iacr.org/2023/077.pdf)), and a 2026 preprint proposes one with standard signature syntax ([BRaccoon](https://eprint.iacr.org/2026/1084)).
+
+Credential scheme choices:
+
+- **RSA blind signatures (v1 default).** The only standardised publicly verifiable blind signature, and the simplest to implement correctly. Its cost is size: 384 bytes or more per signature in every ballot entry.
+- **Blind BLS (first alternative).** A pairing-based drop-in replacement behind the same algorithm identifier, with 48-byte signatures. The blind variant has no standard, and it needs a pairing library on server and client.
+- **Public registration (preferred long-term direction).** Voters register public keys or commitments openly, and each ballot proves membership with a linkable ring signature or a zero-knowledge set-membership proof. This removes blind signing and lets everyone see exactly which roll entries registered, so the registrar cannot issue hidden credentials.
+- **Excluded.** Blind Schnorr is forgeable when signing sessions run in parallel ([Benhamouda et al.](https://iacr.org/archive/eurocrypt2021/126960077/126960077.pdf)). Elliptic-curve Privacy Pass tokens can be verified only by the issuer, which rules out public verification.
+
+Signing keys of the registrar and the log are held in an HSM where one is available.
+
+In v1 the service generates the election key pair, keeps the private key until the close and then publishes it. Early decryption is prevented by business logic and operator trust, not by cryptography. Threshold decryption among trustees arrives with the mixnet profile, where the key must never be revealed.
+
+P-256 and AES-GCM are chosen for ballot encryption because browsers provide both natively (section 11).
+
+## 7. Public log and data formats
+
+Each election has one append-only Merkle log, in the style of Certificate Transparency, and the complete log is downloadable as a single export.
+
+| Entry type | Written by | Content |
+| --- | --- | --- |
+| `manifest` | Admin | Election definition, algorithms, public keys, schedule |
+| `roll_commit` | Admin | Pseudonymous roll references and their count |
+| `issuance` | Registrar | Roll reference and sequence number |
+| `registration_close` | Registrar | Final issued count |
+| `ballot` | Ballot box | Credential public key, registrar signature, ciphertext, ballot signature |
+| `voting_close` | Ballot box | Final cast count |
+| `election_key` | Tally | Election private key |
+| `ballot_plain` | Tally | Decrypted ranking or invalidity reason, with reference to the ballot entry |
+| `result` | Tally | Winners, pairwise matrix, trace, tie-break events |
+
+Format rules:
+
+- Entries use one canonical, deterministic encoding, so that independent implementations compute identical hashes. The bytes that are hashed and signed use deterministic CBOR (RFC 8949). The export and the API also offer a JSON rendering for human inspection, which is not the reference form.
+- The leaf hash is SHA-256 over a domain-separation byte and the encoded entry.
+- A signed tree head contains election ID, tree size, root hash, timestamp and signature. One is published at every phase transition and at a fixed interval.
+- The log serves inclusion proofs and consistency proofs between any two tree heads.
+- Roll references are salted hashes of the identity plugin's subject ID. Each voter can be told their own reference to check their roll entry and issuance status.
+
+Ballot entries are not public during voting. Where receipts are enabled, the receipt binds the ballot box to the leaf hash, and the entries appear at the close in leaf-hash order.
+
+Witness co-signing of tree heads by independent monitors is planned after v1.
+
+## 8. Ballot rules and tally methods
+
+A ballot is a limited ranking, and every tally method is a pure function from the manifest and the ballots to a result with a full trace.
+
+Ballot rules:
+
+- A ballot is an ordered list of rank groups, each holding one or more candidates.
+- `max_ranks` is set per election, from 1 to the number of candidates. Typical values are 2 to 5.
+- Equal ranks are allowed by default and can be disabled per election.
+- Unranked candidates count as tied below all ranked ones.
+- Whether an empty ballot is a valid abstention is set per election.
+
+| Method | Type | Target |
+| --- | --- | --- |
+| Schulze | Condorcet, single winner or full ranking | v1, default |
+| Ranked Pairs | Condorcet | v1 |
+| Minimax | Condorcet | v1 |
+| Copeland | Condorcet | v1 |
+| Instant runoff | Elimination | v1 |
+| Borda | Positional | v1 |
+| Single transferable vote | Multi-winner, proportional | v1 |
+
+Multi-winner elections can use the top places of the Schulze ranking or single transferable vote. The exact single transferable vote rule set, meaning quota and transfer method, is fixed in M1.
+
+Tally interface and rules:
+
+- `Tally(manifest, ballots)` returns winners, ranking, pairwise matrix, a step-by-step trace and all tie-break events.
+- The library has no I/O, uses exact integer or rational arithmetic, never floating point, and never depends on map iteration order.
+- The server and the verifier CLI use the same package.
+
+The admin chooses the tie-breaking when creating the election, and the choice is recorded in the manifest. Only non-random rules exist: every rule is computed from the ballots or fixed in the manifest before voting starts. The admin picks an ordered chain of rules; each rule is applied only to the candidates still tied after the previous one, and the chain must end with *fixed order* or *declare tie*:
+
+- **Most first ranks.** The tied candidate ranked first on the most ballots wins. If still tied, second ranks are compared, and so on down to the maximum rank.
+- **Head-to-head.** Among the tied candidates only, the one who beats the others pairwise wins.
+- **Borda score.** The tied candidate with the highest Borda score over all ballots wins.
+- **Fixed order.** The manifest lists a candidate order that decides ties.
+- **Declare tie.** The result reports the tie and the organisation decides outside the platform.
+
+The default chain is: most first ranks, then declare tie.
+
+No seed and no randomness beacon is used. Every tie-break is recomputable from the manifest and the published ballots alone, and each applied rule appears as a tie-break event in the trace.
+
+## 9. Identity plugins
+
+Identity comes from pluggable providers that return a stable subject ID; eligibility is a separate electoral roll matched against those IDs.
+
+```go
+type IdentityProvider interface {
+    ID() string
+    Begin(ctx context.Context, electionID string) (redirectURL string, err error)
+    Complete(ctx context.Context, callback *http.Request) (Subject, error)
+}
+
+type Subject struct {
+    Provider   string
+    StableID   string
+    Attributes map[string]string
+}
+```
+
+| Plugin | Subject ID | Target | Note |
+| --- | --- | --- | --- |
+| Email link | Email address | v1 | Roll is a list of addresses |
+| OpenID Connect | Issuer and `sub` claim | v1 | Covers most organisational single sign-on |
+| ATProto | DID | v1 or shortly after | The roll must list specific DIDs, because an account is not proof of one person |
+| SAML | Name ID | Later | Needed for BundID |
+
+Rules:
+
+- An election may accept several providers; the roll stores provider and subject ID per voter.
+- The registrar stores only the roll reference and an issued flag. It keeps no profile data.
+- v1 plugins are Go packages compiled into the registrar. An out-of-process plugin protocol can follow.
+
+BundID needs an organisational step as well as code. Its integration process uses SAML ([FITKO slides](https://www.fitko.de/fileadmin/fitko/veranstaltungen/ozg-erfahrungsaustausch-22/BundID_OZG-Erfahrungsaustausch.pdf)), and one integrator states that only public authorities currently get access ([Bare.ID](https://support.bare.id/de/kb/articles/pdf/beh-rdliche-identity-provider-einbinden-bundid-elster-unternehmenskonto-bayernid)).
+
+## 10. Architecture and deployment
+
+All services are stateless Go processes that scale horizontally on Kubernetes; PostgreSQL is the only stateful component.
+
+| Service | State | Scaling |
+| --- | --- | --- |
+| Registrar | Roll references and issued flags in its own database | Horizontal, autoscaled |
+| Ballot box | Ballots and used credentials in its own database | Horizontal, autoscaled |
+| Log | Entries, Merkle nodes and tree heads | One sequencer per election for appends; read path horizontal and cacheable |
+| Tally | None; runs once at the close | Single job |
+| Static client | None | Any static host or CDN |
+
+Deployment rules:
+
+- One Go binary provides all roles as subcommands: `registrar`, `ballotbox`, `log`, `tally`, `verify`.
+- Registrar and ballot box run as separate deployments with separate databases, credentials and domains. Operation by separate parties is supported and recommended.
+- The ballot box and its ingress write no IP addresses or other client identifiers to logs or metrics.
+- A valid credential signature is the ballot box's abuse control, so it needs no IP-based rate limiting.
+- Append ordering is serialised in PostgreSQL, so any replica can accept writes without a separate coordinator.
+- Log exports and proofs are immutable once published and can be served from object storage.
+- Signing keys are accessed through an HSM interface (PKCS#11 or a network HSM); a software key store exists for development.
+- Deployment artefacts are a container image and a Helm chart.
+
+## 11. Web client
+
+The voting client is a static bundle that does all voter-side cryptography in the browser and works on desktop and mobile.
+
+- **Delivery.** The bundle is served from the ballot-box origin without cookies. Its hash is published in the manifest and the build is reproducible.
+- **Crypto code.** The client uses the browser's built-in Web Crypto API wherever it offers the algorithm. Operations it lacks, such as RSA blinding or ML-DSA, fall back to the project's Go code compiled to WebAssembly.
+- **Ranking interface.** Drag and drop, with tap-to-rank on touch screens and full keyboard operation. The interface enforces `max_ranks` and shows the ballot for confirmation before submission.
+- **Credential storage.** The credential stays in browser storage between registration and voting. The client offers an encrypted export as file or QR code, for backup and for voting on another device.
+- **Receipt.** In receipt mode full, the receipt can be downloaded, printed or shown as a QR code. The client checks it automatically after the close if the voter returns.
+- **Accessibility and languages.** The target is WCAG 2.1 AA. German and English ship first; all text is translatable.
+- **Admin interface.** A separate authenticated interface manages manifests, rolls and the schedule. It warns when the number of possible ballots exceeds the number of voters.
+
+## 12. Verification and testing
+
+Correctness of the result rests on public recomputation, so the verifier and the test vectors are first-class deliverables.
+
+The verifier CLI takes a log export and checks, in order:
+
+1. Tree head signatures and consistency between all tree heads.
+2. Every issuance refers to a distinct roll entry.
+3. Cast ≤ issued ≤ eligible.
+4. Every ballot carries a valid registrar signature and ballot signature, and no credential is used twice.
+5. The published election key matches the public key in the manifest, and each plaintext matches its ciphertext.
+6. The recomputed tally equals the logged result, including tie-break events.
+
+Testing:
+
+- Published test vectors per method, covering cycles, ties, equal ranks and truncated ballots.
+- Property tests, for example that a Condorcet winner wins under every Condorcet method and that ballot order never changes the result.
+- Cross-checks against existing open source implementations of the same methods.
+- Fuzzing of every parser that reads untrusted input.
+
+Formal methods:
+
+- A symbolic protocol model in Tamarin or ProVerif is a separate milestone. It targets unlinkability and the count invariant.
+- Code-level verification is optional and not required for v1. Go programs can be verified with Gobra from ETH Zurich; this is from memory and needs checking before it is planned. The tally package is the only sensible target.
+- The data formats are fully specified, so independent verifiers in other languages are possible and welcome.
+
+## 13. Milestones
+
+Implementation starts with the parts that are pure and independently testable, and adds services and the interface afterwards.
+
+1. **M0: Repository.** GitHub repository with this specification as `SPEC.md`, licence, CI and linting.
+2. **M1: Tally library.** All v1 methods, tie-breaking, test vectors and the `tally` command.
+3. **M2: Log.** Canonical encoding, Merkle tree, tree heads, proofs, export format and the `verify` command for log structure.
+4. **M3: Cryptography.** Blind credential, ballot signatures, ballot encryption and key publication. A review of Helios and Elekto comes first (Belenios is done, see section 14).
+5. **M4: Services.** Registrar and ballot box on PostgreSQL, with the email identity plugin. End-to-end election from the command line.
+6. **M5: Web client.** Voting client and admin interface.
+7. **M6: Deployment.** Container image, Helm chart, autoscaling, HSM key store.
+8. **M7: Identity.** OpenID Connect and ATProto plugins.
+9. **M8: Review.** Protocol model and an external security review before any real election.
+
+After v1: mixnet profile, SAML and BundID, threshold decryption, blind BLS and public-registration credential schemes, post-quantum credential scheme, witness co-signing.
+
+## 14. Decisions
+
+- **Project name.** Stimmig (German: "Stimme" is a vote, "stimmig" means coherent, it adds up). No voting product of that name was found in a web search on 2026-11-11.&#32;
+- **Licence.** EUPL-1.2.
+- **Canonical encoding.** Deterministic CBOR, with a JSON rendering for inspection.
+- **Client crypto.** Browser Web Crypto first, Go compiled to WebAssembly as fallback.
+- **Lost credentials.** Not reissued, at least in v1.
+- **Tie-breaking.** Non-random only: a chain of ballot-derived or fixed rules chosen at election creation. No seed, no external beacon.
+- **Trustee key setup.** None in v1: the election key is published at the close, and early decryption is prevented by business logic.
+- **Multi-winner elections.** Both the Schulze ranking and single transferable vote in v1.
+- **Existing systems.** Belenios was reviewed from source (4.0.0\~dev, November 2026) and is not used as a base: its credential authority knows the voter-to-credential mapping, storage is file-based on a single node, there is no rank limit, no configurable tie-breaking and no receipt mode, and identity schemes are compiled-in OCaml modules. It remains the reference for the later mixnet profile, for the public archive and in-browser verification, and for the ranking UX of its booth. Its code is AGPL-3.0, so copying it would make the combined work AGPL; it is used as a reference only. Helios and Elekto are still to be studied before M3.
