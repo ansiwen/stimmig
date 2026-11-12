@@ -161,10 +161,10 @@ func CloseRegistration(ctx context.Context, l *publog.Log, issued uint64) error 
 	return appendAndSign(ctx, l, publog.TypeRegistrationClose, RegistrationClose{Issued: issued})
 }
 
-// PublishBallots closes the voting: it appends all ballots ordered by leaf
-// hash, so that the arrival order is not revealed, then the voting_close
-// entry, and signs a tree head.
-func PublishBallots(ctx context.Context, l *publog.Log, ballots []Ballot) error {
+// BallotRecords returns the records that close the voting: all ballots
+// ordered by leaf hash, so that the arrival order is not revealed, then the
+// voting_close entry.
+func BallotRecords(ballots []Ballot) ([]publog.Record, error) {
 	type item struct {
 		leaf merkle.Hash
 		b    Ballot
@@ -173,17 +173,27 @@ func PublishBallots(ctx context.Context, l *publog.Log, ballots []Ballot) error 
 	for i, b := range ballots {
 		leaf, err := BallotLeaf(b)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		items[i] = item{leaf, b}
 	}
 	sort.Slice(items, func(i, j int) bool { return bytes.Compare(items[i].leaf[:], items[j].leaf[:]) < 0 })
+	records := make([]publog.Record, 0, len(items)+1)
 	for _, it := range items {
-		if _, err := l.Append(ctx, publog.TypeBallot, it.b); err != nil {
-			return err
-		}
+		records = append(records, publog.Record{Type: publog.TypeBallot, Body: it.b})
 	}
-	return appendAndSign(ctx, l, publog.TypeVotingClose, VotingClose{Cast: uint64(len(ballots))})
+	return append(records, publog.Record{Type: publog.TypeVotingClose, Body: VotingClose{Cast: uint64(len(ballots))}}), nil
+}
+
+// PublishBallots closes the voting: it appends the ballot records and
+// signs a tree head.
+func PublishBallots(ctx context.Context, l *publog.Log, ballots []Ballot) error {
+	records, err := BallotRecords(ballots)
+	if err != nil {
+		return err
+	}
+	_, err = l.AppendAll(ctx, -1, records)
+	return err
 }
 
 // openBallot decrypts one ballot for its ballot_plain entry.
@@ -200,19 +210,42 @@ func openBallot(electionID merkle.Hash, private []byte, index uint64, b Ballot) 
 	return BallotPlain{Ballot: index, Ranking: &ranking}, nil
 }
 
-// PublishTally publishes the election private key, decrypts every ballot of
-// the log into a ballot_plain entry, computes the result from the decrypted
-// rankings in log order, appends it and signs a tree head.
-func PublishTally(ctx context.Context, l *publog.Log, m publog.Manifest, private []byte) (*tally.Result, error) {
+// TallyRecords returns the records that end an election: the election
+// private key, one ballot_plain entry per ballot, and the result computed
+// from the decrypted rankings in log order. ballots and indexes are the
+// ballot entries of the log and their log indexes, as Report holds them.
+func TallyRecords(m publog.Manifest, electionID merkle.Hash, private []byte, ballots []Ballot, indexes []uint64) ([]publog.Record, *tally.Result, error) {
 	if err := ballot.MatchElectionKey(m.ElectionKey, private); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var plains []BallotPlain
+	records := []publog.Record{{Type: publog.TypeElectionKey, Body: KeyRelease{PrivateKey: private}}}
 	var rankings []tally.Ballot
+	for i, b := range ballots {
+		plain, err := openBallot(electionID, private, indexes[i], b)
+		if err != nil {
+			return nil, nil, err
+		}
+		records = append(records, publog.Record{Type: publog.TypeBallotPlain, Body: plain})
+		if plain.Ranking != nil {
+			rankings = append(rankings, *plain.Ranking)
+		}
+	}
+	res, err := tally.Tally(m.Tally, rankings)
+	if err != nil {
+		return nil, nil, err
+	}
+	return append(records, publog.Record{Type: publog.TypeResult, Body: res}), res, nil
+}
+
+// PublishTally reads the ballots of the log, appends the tally records and
+// signs a tree head.
+func PublishTally(ctx context.Context, l *publog.Log, m publog.Manifest, private []byte) (*tally.Result, error) {
 	size, err := l.Size(ctx)
 	if err != nil {
 		return nil, err
 	}
+	var ballots []Ballot
+	var indexes []uint64
 	for index := uint64(0); index < size; index++ {
 		data, err := l.Entry(ctx, index)
 		if err != nil {
@@ -229,26 +262,13 @@ func PublishTally(ctx context.Context, l *publog.Log, m publog.Manifest, private
 		if err := canon.Unmarshal(body, &b); err != nil {
 			return nil, err
 		}
-		plain, err := openBallot(l.ElectionID(), private, index, b)
-		if err != nil {
-			return nil, err
-		}
-		plains = append(plains, plain)
-		if plain.Ranking != nil {
-			rankings = append(rankings, *plain.Ranking)
-		}
+		ballots = append(ballots, b)
+		indexes = append(indexes, index)
 	}
-	res, err := tally.Tally(m.Tally, rankings)
+	records, res, err := TallyRecords(m, l.ElectionID(), private, ballots, indexes)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := l.Append(ctx, publog.TypeElectionKey, KeyRelease{PrivateKey: private}); err != nil {
-		return nil, err
-	}
-	for _, plain := range plains {
-		if _, err := l.Append(ctx, publog.TypeBallotPlain, plain); err != nil {
-			return nil, err
-		}
-	}
-	return res, appendAndSign(ctx, l, publog.TypeResult, res)
+	_, err = l.AppendAll(ctx, -1, records)
+	return res, err
 }

@@ -38,6 +38,9 @@ type Report struct {
 	// the ballot rules are counted in Result.Invalid.
 	Undecryptable uint64
 	Result        *tally.Result
+	// Ballots holds the ballot entries and BallotIndexes their log indexes.
+	Ballots       []Ballot
+	BallotIndexes []uint64
 }
 
 // Verify checks a log export end to end (SPEC.md section 12):
@@ -85,8 +88,6 @@ type verifier struct {
 	roll        map[merkle.Hash]bool // roll reference to "credential issued"
 	credentials map[merkle.Hash]bool // credential keys that voted
 	lastLeaf    merkle.Hash
-	ballots     []Ballot
-	indexes     []uint64 // log index of each ballot
 	private     []byte
 	plains      uint64
 	rankings    []tally.Ballot
@@ -197,12 +198,12 @@ func (v *verifier) entry(log *publog.Report, index uint64, typ string, body []by
 		if err != nil {
 			return err
 		}
-		if len(v.ballots) > 0 && bytes.Compare(v.lastLeaf[:], leaf[:]) >= 0 {
+		if len(v.rep.Ballots) > 0 && bytes.Compare(v.lastLeaf[:], leaf[:]) >= 0 {
 			return errors.New("ballots are not ordered by leaf hash")
 		}
 		v.lastLeaf = leaf
-		v.ballots = append(v.ballots, b)
-		v.indexes = append(v.indexes, index)
+		v.rep.Ballots = append(v.rep.Ballots, b)
+		v.rep.BallotIndexes = append(v.rep.BallotIndexes, index)
 		v.rep.Cast++
 		if v.rep.Cast > v.rep.Issued {
 			return errors.New("more ballots cast than credentials issued")
@@ -234,7 +235,7 @@ func (v *verifier) entry(log *publog.Report, index uint64, typ string, body []by
 		if v.plains >= v.rep.Cast {
 			return errors.New("more ballot_plain entries than ballots")
 		}
-		want, err := openBallot(id, v.private, v.indexes[v.plains], v.ballots[v.plains])
+		want, err := openBallot(id, v.private, v.rep.BallotIndexes[v.plains], v.rep.Ballots[v.plains])
 		if err != nil {
 			return err
 		}
