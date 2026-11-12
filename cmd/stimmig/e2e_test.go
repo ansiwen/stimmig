@@ -18,6 +18,7 @@ import (
 	"github.com/ansiwen/stimmig/client"
 	"github.com/ansiwen/stimmig/identity"
 	"github.com/ansiwen/stimmig/internal/testdb"
+	"github.com/ansiwen/stimmig/keystore"
 	"github.com/ansiwen/stimmig/logsvc"
 	"github.com/ansiwen/stimmig/registrar"
 )
@@ -72,10 +73,16 @@ func TestElectionFromCommandLine(t *testing.T) {
 	db := testdb.Open(t)
 	client.PollInterval = 10 * time.Millisecond
 
+	// All services encrypt their private keys at rest.
+	keys, err := keystore.Parse(strings.Repeat("ab", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
 	store, err := logsvc.NewStore(ctx, db)
 	if err != nil {
 		t.Fatal(err)
 	}
+	store.Keys = keys
 	logSrv := httptest.NewServer((&logsvc.Server{Store: store, AdminToken: "la", RegistrarToken: "lr", BallotBoxToken: "lb"}).Handler())
 	defer logSrv.Close()
 
@@ -83,7 +90,7 @@ func TestElectionFromCommandLine(t *testing.T) {
 	regMux := http.NewServeMux()
 	regSrv := httptest.NewServer(regMux)
 	defer regSrv.Close()
-	reg := &registrar.Server{DB: db, Log: &api.Client{Base: logSrv.URL, Token: "lr"}, AdminToken: "ra"}
+	reg := &registrar.Server{DB: db, Log: &api.Client{Base: logSrv.URL, Token: "lr"}, AdminToken: "ra", Keys: keys}
 	reg.Providers = map[string]identity.Provider{"email": &identity.Email{
 		BaseURL: regSrv.URL, Secret: []byte("secret"), Mailer: mails,
 		Allow: func(ctx context.Context, state, address string) bool {
@@ -95,7 +102,7 @@ func TestElectionFromCommandLine(t *testing.T) {
 	}
 	regMux.Handle("/", reg.Handler())
 
-	box := &ballotbox.Server{DB: db, Log: &api.Client{Base: logSrv.URL, Token: "lb"}, AdminToken: "ba"}
+	box := &ballotbox.Server{DB: db, Log: &api.Client{Base: logSrv.URL, Token: "lb"}, AdminToken: "ba", Keys: keys}
 	if err := box.Init(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -226,6 +233,34 @@ func TestElectionFromCommandLine(t *testing.T) {
 	if out := stimmig(t, 0, "admin", "tally", "-election", id); !strings.Contains(out, "winners: yes") {
 		t.Fatalf("tally: %s", out)
 	}
+
+	// No private key is in a database in clear: an Ed25519 private key
+	// ends with its public key, and a sealed one is longer.
+	for _, table := range []string{"log_keys", "box_keys"} {
+		rows, err := db.QueryContext(ctx, "SELECT public, private FROM "+table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for rows.Next() {
+			var public, private []byte
+			if err := rows.Scan(&public, &private); err != nil {
+				t.Fatal(err)
+			}
+			if len(private) <= 64 || bytes.HasSuffix(private, public) {
+				t.Errorf("%s holds a private key in clear", table)
+			}
+			n++
+		}
+		_ = rows.Close()
+		if n == 0 {
+			t.Errorf("%s is empty", table)
+		}
+	}
+	// With another key-encryption key the stored keys do not open.
+	reg.Keys, _ = keystore.Parse(strings.Repeat("cd", 32))
+	stimmig(t, 1, "admin", "tally", "-election", strings.TrimSpace(stimmig(t, 0, "admin", "create", "-definition", def)))
+	reg.Keys = keys
 
 	// Mistakes of the admin.
 	stimmig(t, 1, "admin", "create", "-definition", write("bad.json", `{"title": "x", "tally": {"candidates": ["A"], "method": "plurality"}}`))

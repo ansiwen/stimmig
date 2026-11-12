@@ -24,6 +24,7 @@ import (
 	"github.com/ansiwen/stimmig/ballot"
 	"github.com/ansiwen/stimmig/canon"
 	"github.com/ansiwen/stimmig/election"
+	"github.com/ansiwen/stimmig/keystore"
 	"github.com/ansiwen/stimmig/merkle"
 	"github.com/ansiwen/stimmig/publog"
 )
@@ -58,6 +59,17 @@ type Server struct {
 	// If it is set, the ballot box serves the bundle at / and its hash at
 	// GET /v1/client.
 	ClientDir string
+	// Keys encrypts the private receipt keys at rest. Nil stores them in
+	// clear.
+	Keys keystore.Sealer
+}
+
+// sealer returns the key store, or the unencrypted one if none is set.
+func (s *Server) sealer() keystore.Sealer {
+	if s.Keys == nil {
+		return keystore.Plain{}
+	}
+	return s.Keys
 }
 
 // Init creates the tables if they are missing.
@@ -105,14 +117,16 @@ func electionID(r *http.Request) (merkle.Hash, error) {
 }
 
 // newKey creates a receipt key.
-//
-// shortcut: private keys are stored in the database in clear; M6 moves them behind the HSM interface.
 func (s *Server) newKey(_ http.ResponseWriter, r *http.Request) (any, error) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, err
 	}
-	_, err = s.DB.ExecContext(r.Context(), `INSERT INTO box_keys (public, private) VALUES ($1, $2)`, []byte(pub), []byte(priv))
+	sealed, err := s.sealer().Seal(priv, pub)
+	if err != nil {
+		return nil, err
+	}
+	_, err = s.DB.ExecContext(r.Context(), `INSERT INTO box_keys (public, private) VALUES ($1, $2)`, []byte(pub), sealed)
 	return api.BallotBoxKey{ReceiptKey: pub}, err
 }
 
@@ -317,8 +331,12 @@ func (s *Server) cast(w http.ResponseWriter, r *http.Request) (any, error) {
 		if m.ReceiptMode != publog.ReceiptFull {
 			return nil
 		}
-		var private []byte
-		if err := tx.QueryRowContext(ctx, `SELECT private FROM box_keys WHERE election = $1`, id[:]).Scan(&private); err != nil {
+		var public, sealed []byte
+		if err := tx.QueryRowContext(ctx, `SELECT public, private FROM box_keys WHERE election = $1`, id[:]).Scan(&public, &sealed); err != nil {
+			return err
+		}
+		private, err := s.sealer().Open(sealed, public)
+		if err != nil {
 			return err
 		}
 		leaf, err := election.BallotLeaf(b)

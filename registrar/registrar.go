@@ -27,6 +27,7 @@ import (
 	"github.com/ansiwen/stimmig/credential"
 	"github.com/ansiwen/stimmig/election"
 	"github.com/ansiwen/stimmig/identity"
+	"github.com/ansiwen/stimmig/keystore"
 	"github.com/ansiwen/stimmig/merkle"
 	"github.com/ansiwen/stimmig/publog"
 )
@@ -60,6 +61,16 @@ type Server struct {
 	AdminToken string
 	// Providers are the identity providers by their ID.
 	Providers map[string]identity.Provider
+	// Keys encrypts the private keys at rest. Nil stores them in clear.
+	Keys keystore.Sealer
+}
+
+// sealer returns the key store, or the unencrypted one if none is set.
+func (s *Server) sealer() keystore.Sealer {
+	if s.Keys == nil {
+		return keystore.Plain{}
+	}
+	return s.Keys
 }
 
 // Init creates the tables if they are missing.
@@ -102,8 +113,6 @@ func electionID(r *http.Request) (merkle.Hash, error) {
 // newKeys creates the issuing key and the election key of one election.
 // An issuing key must not serve two elections: the registrar signs blindly
 // and could not tell for which election a credential is.
-//
-// shortcut: private keys are stored in the database in clear; M6 moves them behind the HSM interface.
 func (s *Server) newKeys(_ http.ResponseWriter, r *http.Request) (any, error) {
 	issuing, err := credential.GenerateIssuingKey(rand.Reader)
 	if err != nil {
@@ -117,9 +126,17 @@ func (s *Server) newKeys(_ http.ResponseWriter, r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	issuingSealed, err := s.sealer().Seal(x509.MarshalPKCS1PrivateKey(issuing), issuingPublic)
+	if err != nil {
+		return nil, err
+	}
+	electionSealed, err := s.sealer().Seal(electionPrivate, electionPublic)
+	if err != nil {
+		return nil, err
+	}
 	_, err = s.DB.ExecContext(r.Context(),
 		`INSERT INTO reg_keys (issuing_public, issuing_private, election_public, election_private) VALUES ($1, $2, $3, $4)`,
-		issuingPublic, x509.MarshalPKCS1PrivateKey(issuing), electionPublic, electionPrivate)
+		issuingPublic, issuingSealed, electionPublic, electionSealed)
 	return api.RegistrarKeys{IssuingKey: issuingPublic, ElectionKey: electionPublic}, err
 }
 
@@ -290,11 +307,15 @@ func (s *Server) tally(_ http.ResponseWriter, r *http.Request) (any, error) {
 	default:
 		return nil, api.Errorf(http.StatusConflict, "the voting is not closed; the log is in phase %q", rep.Phase)
 	}
-	var private []byte
-	err = s.DB.QueryRowContext(ctx, `SELECT election_private FROM reg_keys WHERE election = $1`, id[:]).Scan(&private)
+	var public, sealed []byte
+	err = s.DB.QueryRowContext(ctx, `SELECT election_public, election_private FROM reg_keys WHERE election = $1`, id[:]).Scan(&public, &sealed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, api.Errorf(http.StatusNotFound, "election not found")
 	}
+	if err != nil {
+		return nil, err
+	}
+	private, err := s.sealer().Open(sealed, public)
 	if err != nil {
 		return nil, err
 	}
@@ -455,8 +476,12 @@ func (s *Server) issue(ctx context.Context, session string, subject identity.Sub
 				return api.Errorf(http.StatusConflict, "a credential was already issued for you")
 			}
 		} else {
-			var private []byte
-			if err := tx.QueryRowContext(ctx, `SELECT issuing_private FROM reg_keys WHERE election = $1`, id[:]).Scan(&private); err != nil {
+			var public, sealed []byte
+			if err := tx.QueryRowContext(ctx, `SELECT issuing_public, issuing_private FROM reg_keys WHERE election = $1`, id[:]).Scan(&public, &sealed); err != nil {
+				return err
+			}
+			private, err := s.sealer().Open(sealed, public)
+			if err != nil {
 				return err
 			}
 			key, err := x509.ParsePKCS1PrivateKey(private)

@@ -15,6 +15,7 @@ import (
 	"github.com/ansiwen/stimmig/api"
 	"github.com/ansiwen/stimmig/ballotbox"
 	"github.com/ansiwen/stimmig/identity"
+	"github.com/ansiwen/stimmig/keystore"
 	"github.com/ansiwen/stimmig/logsvc"
 	"github.com/ansiwen/stimmig/registrar"
 )
@@ -25,6 +26,7 @@ const serveHelp = `environment of the services:
   STIMMIG_DATABASE_URL     PostgreSQL URL of this service's database
   STIMMIG_LISTEN           listen address, default :8080
   STIMMIG_ADMIN_TOKEN      bearer token of this service's admin API
+  STIMMIG_KEY_ENCRYPTION_KEY  64 hexadecimal characters; encrypts the private keys in the database
 log:
   STIMMIG_REGISTRAR_TOKEN  token with which the registrar appends
   STIMMIG_BALLOTBOX_TOKEN  token with which the ballot box appends
@@ -67,14 +69,25 @@ func serve(ctx context.Context, role string, stderr io.Writer) error {
 	if listen == "" {
 		listen = ":8080"
 	}
+	keys, err := keystore.Parse(os.Getenv("STIMMIG_KEY_ENCRYPTION_KEY"))
+	if err != nil {
+		return err
+	}
+	if keys == (keystore.Plain{}) {
+		_, _ = fmt.Fprintf(stderr, "stimmig %s: warning: STIMMIG_KEY_ENCRYPTION_KEY is not set; private keys are stored unencrypted\n", role)
+	}
 	var handler func(db *sql.DB) (http.Handler, error)
 	switch role {
 	case "log":
 		regToken, boxToken := e.get("STIMMIG_REGISTRAR_TOKEN"), e.get("STIMMIG_BALLOTBOX_TOKEN")
 		handler = func(db *sql.DB) (http.Handler, error) {
 			store, err := logsvc.NewStore(ctx, db)
+			if err != nil {
+				return nil, err
+			}
+			store.Keys = keys
 			s := &logsvc.Server{Store: store, AdminToken: adminToken, RegistrarToken: regToken, BallotBoxToken: boxToken}
-			return s.Handler(), err
+			return s.Handler(), nil
 		}
 	case "registrar":
 		log := &api.Client{Base: e.get("STIMMIG_LOG_URL"), Token: e.get("STIMMIG_LOG_TOKEN")}
@@ -87,7 +100,7 @@ func serve(ctx context.Context, role string, stderr io.Writer) error {
 			mailer = identity.SMTPMailer{Addr: addr, From: e.get("STIMMIG_SMTP_FROM")}
 		}
 		handler = func(db *sql.DB) (http.Handler, error) {
-			s := &registrar.Server{DB: db, Log: log, AdminToken: adminToken}
+			s := &registrar.Server{DB: db, Log: log, AdminToken: adminToken, Keys: keys}
 			s.Providers = map[string]identity.Provider{"email": &identity.Email{
 				BaseURL: publicURL,
 				Secret:  []byte(secret),
@@ -101,7 +114,7 @@ func serve(ctx context.Context, role string, stderr io.Writer) error {
 	case "ballotbox":
 		log := &api.Client{Base: e.get("STIMMIG_LOG_URL"), Token: e.get("STIMMIG_LOG_TOKEN")}
 		handler = func(db *sql.DB) (http.Handler, error) {
-			s := &ballotbox.Server{DB: db, Log: log, AdminToken: adminToken, ClientDir: os.Getenv("STIMMIG_CLIENT_DIR")}
+			s := &ballotbox.Server{DB: db, Log: log, AdminToken: adminToken, ClientDir: os.Getenv("STIMMIG_CLIENT_DIR"), Keys: keys}
 			return s.Handler(), s.Init(ctx)
 		}
 	}

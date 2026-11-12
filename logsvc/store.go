@@ -11,6 +11,7 @@ import (
 	"errors"
 
 	"github.com/ansiwen/stimmig/canon"
+	"github.com/ansiwen/stimmig/keystore"
 	"github.com/ansiwen/stimmig/merkle"
 	"github.com/ansiwen/stimmig/publog"
 )
@@ -25,6 +26,16 @@ var schema string
 // shortcut: proofs read all leaf hashes up to the tree size, which is fine for thousands of entries; store the inner Merkle nodes when logs get large.
 type Store struct {
 	db *sql.DB
+	// Keys encrypts the private log keys at rest. Nil stores them in clear.
+	Keys keystore.Sealer
+}
+
+// sealer returns the key store, or the unencrypted one if none is set.
+func (s *Store) sealer() keystore.Sealer {
+	if s.Keys == nil {
+		return keystore.Plain{}
+	}
+	return s.Keys
 }
 
 // NewStore creates the tables if they are missing.
@@ -34,15 +45,17 @@ func NewStore(ctx context.Context, db *sql.DB) (*Store, error) {
 }
 
 // NewKey creates a log key and returns its public key. The private key
-// stays in the database.
-//
-// shortcut: private keys are stored in the database in clear; M6 moves them behind the HSM interface.
+// stays in the database, sealed by the key store.
 func (s *Store) NewKey(ctx context.Context) (ed25519.PublicKey, error) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO log_keys (public, private) VALUES ($1, $2)`, []byte(pub), []byte(priv))
+	sealed, err := s.sealer().Seal(priv, pub)
+	if err != nil {
+		return nil, err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO log_keys (public, private) VALUES ($1, $2)`, []byte(pub), sealed)
 	return pub, err
 }
 
@@ -55,17 +68,23 @@ func (s *Store) Bind(ctx context.Context, public []byte, id merkle.Hash) (ed2551
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, errors.New("logsvc: the log key is unknown or already in use")
 	}
-	return priv, err
+	if err != nil {
+		return nil, err
+	}
+	return s.sealer().Open(priv, public)
 }
 
 // Signer returns the log key of an election.
 func (s *Store) Signer(ctx context.Context, id merkle.Hash) (ed25519.PrivateKey, error) {
-	var priv []byte
-	err := s.db.QueryRowContext(ctx, `SELECT private FROM log_keys WHERE election = $1`, id[:]).Scan(&priv)
+	var public, priv []byte
+	err := s.db.QueryRowContext(ctx, `SELECT public, private FROM log_keys WHERE election = $1`, id[:]).Scan(&public, &priv)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, publog.ErrNotFound
 	}
-	return priv, err
+	if err != nil {
+		return nil, err
+	}
+	return s.sealer().Open(priv, public)
 }
 
 // Create implements publog.Store.
