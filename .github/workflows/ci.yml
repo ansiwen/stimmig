@@ -18,6 +18,7 @@ jobs:
           go-version-file: go.mod
       - run: go vet ./...
       - run: go test -race ./...
+      - run: go test ./tally -run '^$' -fuzz FuzzTally -fuzztime 30s
 
   lint:
     runs-on: ubuntu-latest
