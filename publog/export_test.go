@@ -15,7 +15,7 @@ import (
 func export(t *testing.T, l *Log) []byte {
 	t.Helper()
 	var buf bytes.Buffer
-	if err := l.Export(&buf); err != nil {
+	if err := l.Export(ctx, &buf); err != nil {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
@@ -26,7 +26,7 @@ func TestExportVerify(t *testing.T) {
 	data := export(t, l)
 	var seen []string
 	rep, err := Verify(bytes.NewReader(data), func(rep *Report, index uint64, typ string, body []byte) error {
-		want, _ := l.Entry(index)
+		want, _ := l.Entry(ctx, index)
 		if !bytes.HasSuffix(want, body) || rep.ElectionID != l.ElectionID() {
 			t.Errorf("entry %d differs", index)
 		}
@@ -50,10 +50,10 @@ func TestExportVerify(t *testing.T) {
 
 func TestExportNeedsFinalHead(t *testing.T) {
 	l := testLog(t, 2)
-	if _, err := l.Append(TypeBallot, map[string]int{}); err != nil {
+	if _, err := l.Append(ctx, TypeBallot, map[string]int{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := l.Export(io.Discard); err == nil {
+	if err := l.Export(ctx, io.Discard); err == nil {
 		t.Fatal("export without a final tree head")
 	}
 }
@@ -125,7 +125,8 @@ func TestVerifyRejects(t *testing.T) {
 	id := l.ElectionID()
 	key := testKey()
 	otherKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{8}, ed25519.SeedSize))
-	root := func(n int) merkle.Hash { return merkle.Root(l.leaves[:n]) }
+	leaves, _ := l.store.Leaves(ctx, l.id, 5)
+	root := func(n int) merkle.Hash { return merkle.Root(leaves[:n]) }
 	sign := func(k ed25519.PrivateKey, id merkle.Hash, size uint64, root merkle.Hash, ts uint64) []byte {
 		h, err := SignTreeHead(k, id, size, root, ts)
 		if err != nil {
@@ -133,7 +134,8 @@ func TestVerifyRejects(t *testing.T) {
 		}
 		return headRecord(t, h)
 	}
-	lastTS := l.heads[len(l.heads)-1].Timestamp
+	last, _ := l.LastHead(ctx)
+	lastTS := last.Timestamp
 	with := func(i int, item ...[]byte) [][]byte { // replace item i
 		out := append([][]byte(nil), good[:i]...)
 		out = append(out, item...)
@@ -196,14 +198,14 @@ func FuzzVerify(f *testing.F) {
 	if err != nil {
 		f.Fatal(err)
 	}
-	if _, err := l.Append(TypeBallot, map[string]int{"sequence": 1}); err != nil {
+	if _, err := l.Append(ctx, TypeBallot, map[string]int{"sequence": 1}); err != nil {
 		f.Fatal(err)
 	}
-	if _, err := l.Head(); err != nil {
+	if _, err := l.Head(ctx); err != nil {
 		f.Fatal(err)
 	}
 	var buf bytes.Buffer
-	if err := l.Export(&buf); err != nil {
+	if err := l.Export(ctx, &buf); err != nil {
 		f.Fatal(err)
 	}
 	f.Add(buf.Bytes())

@@ -2,6 +2,7 @@ package election
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
@@ -21,6 +22,8 @@ import (
 	"github.com/ansiwen/stimmig/publog"
 	"github.com/ansiwen/stimmig/tally"
 )
+
+var ctx = context.Background()
 
 var update = flag.Bool("update", false, "rewrite the golden export in testdata")
 
@@ -176,17 +179,17 @@ func runElection(t *testing.T) *testElection {
 	for i := 0; i < 8; i++ {
 		roll = append(roll, rollReference(i))
 	}
-	if err := PublishRoll(e.log, roll); err != nil {
+	if err := PublishRoll(ctx, e.log, roll); err != nil {
 		t.Fatal(err)
 	}
 	// Registration: 7 of them obtain a credential.
 	for i := 0; i < 7; i++ {
 		e.voters = append(e.voters, register(t, e.manifest, id))
-		if err := PublishIssuance(e.log, rollReference(i), uint64(i)); err != nil {
+		if err := PublishIssuance(ctx, e.log, rollReference(i), uint64(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := CloseRegistration(e.log, 7); err != nil {
+	if err := CloseRegistration(ctx, e.log, 7); err != nil {
 		t.Fatal(err)
 	}
 	// Voting: 6 of them cast a ballot; the ballot box checks it and
@@ -215,10 +218,10 @@ func runElection(t *testing.T) *testElection {
 		box = append(box, v.ballot)
 	}
 	// Close and tally.
-	if err := PublishBallots(e.log, box); err != nil {
+	if err := PublishBallots(ctx, e.log, box); err != nil {
 		t.Fatal(err)
 	}
-	if e.result, err = PublishTally(e.log, e.manifest, k.electionPrivate); err != nil {
+	if e.result, err = PublishTally(ctx, e.log, e.manifest, k.electionPrivate); err != nil {
 		t.Fatal(err)
 	}
 	return e
@@ -227,7 +230,7 @@ func runElection(t *testing.T) *testElection {
 func exportLog(t *testing.T, l *publog.Log) []byte {
 	t.Helper()
 	var buf bytes.Buffer
-	if err := l.Export(&buf); err != nil {
+	if err := l.Export(ctx, &buf); err != nil {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
@@ -265,12 +268,12 @@ func TestElectionEndToEnd(t *testing.T) {
 		}
 		found := false
 		for index := uint64(0); index < final.Size; index++ {
-			entry, _ := e.log.Entry(index)
+			entry, _ := e.log.Entry(ctx, index)
 			if merkle.LeafHash(entry) != leaf {
 				continue
 			}
 			found = true
-			proof, err := e.log.InclusionProof(index, final.Size)
+			proof, err := e.log.InclusionProof(ctx, index, final.Size)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -350,8 +353,9 @@ type rec struct {
 func entries(t *testing.T, l *publog.Log) []rec {
 	t.Helper()
 	var out []rec
-	for index := uint64(1); index < l.Size(); index++ {
-		data, _ := l.Entry(index)
+	size, _ := l.Size(ctx)
+	for index := uint64(1); index < size; index++ {
+		data, _ := l.Entry(ctx, index)
 		typ, body, err := publog.DecodeEntry(data)
 		if err != nil {
 			t.Fatal(err)
@@ -370,11 +374,11 @@ func rebuild(t *testing.T, m publog.Manifest, recs []rec) []byte {
 		t.Fatal(err)
 	}
 	for _, r := range recs {
-		if _, err := l.Append(r.typ, r.body); err != nil {
+		if _, err := l.Append(ctx, r.typ, r.body); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := l.Head(); err != nil {
+	if _, err := l.Head(ctx); err != nil {
 		t.Fatal(err)
 	}
 	return exportLog(t, l)
@@ -559,16 +563,16 @@ func TestEmptyElection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := PublishRoll(l, nil); err != nil {
+	if err := PublishRoll(ctx, l, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := CloseRegistration(l, 0); err != nil {
+	if err := CloseRegistration(ctx, l, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := PublishBallots(l, nil); err != nil {
+	if err := PublishBallots(ctx, l, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := PublishTally(l, m, k.electionPrivate); err != nil {
+	if _, err := PublishTally(ctx, l, m, k.electionPrivate); err != nil {
 		t.Fatal(err)
 	}
 	rep, err := Verify(bytes.NewReader(exportLog(t, l)), nil)

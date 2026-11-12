@@ -6,6 +6,7 @@ package election
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"errors"
 	"io"
@@ -119,13 +120,13 @@ func BallotLeaf(b Ballot) (merkle.Hash, error) {
 }
 
 // PublishRoll appends the roll_commit entry and signs a tree head.
-func PublishRoll(l *publog.Log, references [][]byte) error {
+func PublishRoll(ctx context.Context, l *publog.Log, references [][]byte) error {
 	refs := append([][]byte(nil), references...)
 	sort.Slice(refs, func(i, j int) bool { return bytes.Compare(refs[i], refs[j]) < 0 })
 	if err := checkRoll(refs); err != nil {
 		return err
 	}
-	return appendAndSign(l, publog.TypeRollCommit, RollCommit{References: refs})
+	return appendAndSign(ctx, l, publog.TypeRollCommit, RollCommit{References: refs})
 }
 
 func checkRoll(refs [][]byte) error {
@@ -140,30 +141,30 @@ func checkRoll(refs [][]byte) error {
 	return nil
 }
 
-func appendAndSign(l *publog.Log, typ string, body any) error {
-	if _, err := l.Append(typ, body); err != nil {
+func appendAndSign(ctx context.Context, l *publog.Log, typ string, body any) error {
+	if _, err := l.Append(ctx, typ, body); err != nil {
 		return err
 	}
-	_, err := l.Head()
+	_, err := l.Head(ctx)
 	return err
 }
 
 // PublishIssuance appends an issuance entry.
-func PublishIssuance(l *publog.Log, rollReference []byte, sequence uint64) error {
-	_, err := l.Append(publog.TypeIssuance, Issuance{RollReference: rollReference, Sequence: sequence})
+func PublishIssuance(ctx context.Context, l *publog.Log, rollReference []byte, sequence uint64) error {
+	_, err := l.Append(ctx, publog.TypeIssuance, Issuance{RollReference: rollReference, Sequence: sequence})
 	return err
 }
 
 // CloseRegistration appends the registration_close entry and signs a tree
 // head.
-func CloseRegistration(l *publog.Log, issued uint64) error {
-	return appendAndSign(l, publog.TypeRegistrationClose, RegistrationClose{Issued: issued})
+func CloseRegistration(ctx context.Context, l *publog.Log, issued uint64) error {
+	return appendAndSign(ctx, l, publog.TypeRegistrationClose, RegistrationClose{Issued: issued})
 }
 
 // PublishBallots closes the voting: it appends all ballots ordered by leaf
 // hash, so that the arrival order is not revealed, then the voting_close
 // entry, and signs a tree head.
-func PublishBallots(l *publog.Log, ballots []Ballot) error {
+func PublishBallots(ctx context.Context, l *publog.Log, ballots []Ballot) error {
 	type item struct {
 		leaf merkle.Hash
 		b    Ballot
@@ -178,11 +179,11 @@ func PublishBallots(l *publog.Log, ballots []Ballot) error {
 	}
 	sort.Slice(items, func(i, j int) bool { return bytes.Compare(items[i].leaf[:], items[j].leaf[:]) < 0 })
 	for _, it := range items {
-		if _, err := l.Append(publog.TypeBallot, it.b); err != nil {
+		if _, err := l.Append(ctx, publog.TypeBallot, it.b); err != nil {
 			return err
 		}
 	}
-	return appendAndSign(l, publog.TypeVotingClose, VotingClose{Cast: uint64(len(ballots))})
+	return appendAndSign(ctx, l, publog.TypeVotingClose, VotingClose{Cast: uint64(len(ballots))})
 }
 
 // openBallot decrypts one ballot for its ballot_plain entry.
@@ -202,14 +203,18 @@ func openBallot(electionID merkle.Hash, private []byte, index uint64, b Ballot) 
 // PublishTally publishes the election private key, decrypts every ballot of
 // the log into a ballot_plain entry, computes the result from the decrypted
 // rankings in log order, appends it and signs a tree head.
-func PublishTally(l *publog.Log, m publog.Manifest, private []byte) (*tally.Result, error) {
+func PublishTally(ctx context.Context, l *publog.Log, m publog.Manifest, private []byte) (*tally.Result, error) {
 	if err := ballot.MatchElectionKey(m.ElectionKey, private); err != nil {
 		return nil, err
 	}
 	var plains []BallotPlain
 	var rankings []tally.Ballot
-	for index := uint64(0); index < l.Size(); index++ {
-		data, err := l.Entry(index)
+	size, err := l.Size(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for index := uint64(0); index < size; index++ {
+		data, err := l.Entry(ctx, index)
 		if err != nil {
 			return nil, err
 		}
@@ -237,13 +242,13 @@ func PublishTally(l *publog.Log, m publog.Manifest, private []byte) (*tally.Resu
 	if err != nil {
 		return nil, err
 	}
-	if _, err := l.Append(publog.TypeElectionKey, KeyRelease{PrivateKey: private}); err != nil {
+	if _, err := l.Append(ctx, publog.TypeElectionKey, KeyRelease{PrivateKey: private}); err != nil {
 		return nil, err
 	}
 	for _, plain := range plains {
-		if _, err := l.Append(publog.TypeBallotPlain, plain); err != nil {
+		if _, err := l.Append(ctx, publog.TypeBallotPlain, plain); err != nil {
 			return nil, err
 		}
 	}
-	return res, appendAndSign(l, publog.TypeResult, res)
+	return res, appendAndSign(ctx, l, publog.TypeResult, res)
 }

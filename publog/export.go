@@ -2,6 +2,7 @@ package publog
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -34,12 +35,24 @@ type record struct {
 	Value canon.Raw
 }
 
+// exportPage is the number of entries that Export reads at a time.
+const exportPage = 1000
+
 // Export writes the complete log. It fails if entries were appended after
 // the last tree head; call Head first.
-func (l *Log) Export(w io.Writer) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if n := len(l.heads); n == 0 || l.heads[n-1].Size != uint64(len(l.entries)) {
+func (l *Log) Export(ctx context.Context, w io.Writer) error {
+	heads, err := l.Heads(ctx)
+	if err != nil {
+		return err
+	}
+	if len(heads) == 0 {
+		return errors.New("publog: the log has no tree head")
+	}
+	// The export is a snapshot up to the last tree head.
+	total := heads[len(heads)-1].Size
+	if size, err := l.Size(ctx); err != nil {
+		return err
+	} else if size != total {
 		return errors.New("publog: the last tree head does not cover all entries")
 	}
 	write := func(v any) error {
@@ -54,19 +67,24 @@ func (l *Log) Export(w io.Writer) error {
 		return err
 	}
 	next := 0 // next tree head to write
-	size := uint64(0)
-	for _, e := range l.entries {
-		if err := write(record{Kind: recordEntry, Value: e}); err != nil {
+	for from := uint64(0); from < total; from += exportPage {
+		entries, err := l.Entries(ctx, from, min(from+exportPage, total))
+		if err != nil {
 			return err
 		}
-		size++
-		for ; next < len(l.heads) && l.heads[next].Size == size; next++ {
-			raw, err := canon.Marshal(l.heads[next])
-			if err != nil {
+		for i, e := range entries {
+			if err := write(record{Kind: recordEntry, Value: e}); err != nil {
 				return err
 			}
-			if err := write(record{Kind: recordTreeHead, Value: raw}); err != nil {
-				return err
+			size := from + uint64(i) + 1 //nolint:gosec // i is not negative
+			for ; next < len(heads) && heads[next].Size == size; next++ {
+				raw, err := canon.Marshal(heads[next])
+				if err != nil {
+					return err
+				}
+				if err := write(record{Kind: recordTreeHead, Value: raw}); err != nil {
+					return err
+				}
 			}
 		}
 	}
