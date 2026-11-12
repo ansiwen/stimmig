@@ -117,7 +117,7 @@ Lost credentials cannot be reissued in v1. A reissue would either break the coun
 3. The client sends credential public key, registrar signature, ciphertext and ballot signature to the ballot box, with no cookies or authentication.
 4. The ballot box verifies both signatures and that the credential has not voted, stores the ballot, and, in receipt mode full, returns a receipt: its signature over the election ID and the ballot's leaf hash.
 
-Re-voting is off by default: one ballot per credential. If an election enables it, the last ballot counts and all versions stay visible in the log.
+Re-voting is off by default: one ballot per credential. If an election enables it, the last ballot counts and all versions stay visible in the log. The implementation does not offer re-voting yet: the verifier rejects a log in which a credential is used twice.
 
 ### 5.3 Close and decryption
 
@@ -143,15 +143,35 @@ In mode `none` the voter relies on the public counts and on universal verificati
 
 Mode `none` stops casual vote selling but not a determined seller. A seller can run a modified client that keeps the credential key, or hand the credential to the buyer before voting. In profile A, any data that lets a voter find their ballot also lets them show it to others. Checking inclusion without being able to prove the vote requires profile B or a comparable method.
 
+### 5.6 Messages and bindings
+
+Every signed or encrypted message is the canonical encoding (section 7) of an array that starts with a context text. The context separates the uses of a key, and the election ID binds every message to one election.
+
+| Message | Content | Made with |
+| --- | --- | --- |
+| Credential | `["stimmig-credential-v1", election_id, credential_public_key]` | Blind signature of the registrar's issuing key |
+| Ballot signature | `["stimmig-ballot-v1", election_id, ciphertext]` | Credential private key |
+| Ballot encryption info | `["stimmig-ballot-encryption-v1", election_id, credential_public_key]` | HPKE `info` input |
+| Receipt | `["stimmig-receipt-v1", election_id, leaf_hash]` | Ballot box's receipt key |
+| Tree head | `["stimmig-tree-head-v1", election_id, size, root, timestamp]` | Log key |
+
+Details:
+
+- **Ciphertext.** The ciphertext is the HPKE encapsulated key, an uncompressed P-256 point of 65 bytes, followed by the AEAD ciphertext. The plaintext is the canonical encoding of the ranking: an array of rank groups, each an array of candidate IDs. The associated data is empty.
+- **Binding to the credential.** The credential public key is part of the encryption info. A ciphertext that is copied into the ballot of another credential therefore does not decrypt and is logged as invalid. This answers the ballot-copying attacks on Helios (section 14).
+- **Invalid ballots.** A ballot whose ciphertext does not decrypt is logged with the reason `decryption-failed`; one whose plaintext is not an encoded ranking with `malformed`. A ranking that breaks the ballot rules of the manifest is logged as decrypted, and the tally reports it as invalid in the result.
+- **Issuing key check.** Before blinding, the client checks that the issuing key is an RSA key of at least 3072 bits in canonical DER form, with public exponent 65537 and a modulus without small prime factors. The client cannot check that the exponent is coprime to the group order; a registrar that cheats there could weaken blindness. A proof of correct key generation is an open point for the protocol review (M8).
+- **Keys per role.** The log key, the issuing key, the election key and the receipt key are four different keys.
+
 ## 6. Cryptography and algorithm agility
 
 Every algorithm is named by a versioned identifier in the manifest and fixed for the whole election; the verifier rejects identifiers it does not know.
 
 | Purpose | v1 default | Optional or later |
 | --- | --- | --- |
-| Credential blind signature | RSA blind signatures per [RFC 9474](https://www.rfc-editor.org/rfc/rfc9474), key of 3072 bits or more | Blind BLS as first alternative; later a public-registration scheme or a lattice blind signature |
+| Credential blind signature | RSA blind signatures per [RFC 9474](https://www.rfc-editor.org/rfc/rfc9474), variant RSABSSA-SHA384-PSS-Deterministic, key of 3072 bits or more | Blind BLS as first alternative; later a public-registration scheme or a lattice blind signature |
 | Ballot signature | Ed25519 | ML-DSA, selectable per election |
-| Ballot encryption until close | ECDH key agreement on P-256 plus AES-GCM; the private key is published at the close | None needed |
+| Ballot encryption until close | HPKE ([RFC 9180](https://www.rfc-editor.org/rfc/rfc9180)) in base mode: ECDH key agreement on P-256, HKDF-SHA256 and AES-256-GCM; the private key is published at the close | None needed |
 | Decryption proofs | None: anyone decrypts with the published key | None needed |
 | Log hashing | SHA-256 Merkle tree | None needed |
 | Tree head and receipt signatures | Ed25519 | ML-DSA, selectable per election |
@@ -206,8 +226,23 @@ Encoding details:
 - **Allowed CBOR subset.** Integers, byte strings, text strings, arrays, maps with text keys, booleans and null. Floating-point numbers, tags and indefinite-length items are forbidden. A reader rejects any item that is not in its single canonical encoding: shortest-form integers and lengths, map keys sorted bytewise by their encoding, no duplicate keys.
 - **Entry.** An entry is the array `[type, body]`. The type is the text from the table above and the body is a map. The leaf hash is SHA-256 over the byte `0x00` and the encoded entry; inner nodes hash the byte `0x01` and both children, as in RFC 6962.
 - **Election ID.** The election ID is the leaf hash of entry 0, the manifest. The manifest holds a random nonce of at least 16 bytes, so two elections with the same definition have different IDs.
-- **Manifest.** The body has the fields `version` (1), `title`, `nonce`, `tally` (candidates, method, seats, rank limit, ballot rules and tie-break chain of section 8), `algorithms` and `log_key`. Later milestones add the keys of the other services and the schedule. A reader rejects fields and algorithm identifiers it does not know.
-- **Algorithm identifiers.** `log_hash` is `sha256-rfc6962-v1` and `tree_head_signature` is `ed25519-v1`.
+- **Manifest.** The body has the fields `version` (1), `title`, `nonce`, `tally` (candidates, method, seats, rank limit, ballot rules and tie-break chain of section 8), `algorithms`, `receipt_mode`, `log_key`, `issuing_key` (DER SubjectPublicKeyInfo), `election_key` (uncompressed P-256 point) and, in receipt mode full, `receipt_key`. The schedule is added with the services. A reader rejects fields and algorithm identifiers it does not know.
+- **Algorithm identifiers.** `log_hash` is `sha256-rfc6962-v1`, `tree_head_signature` is `ed25519-v1`, `credential` is `rsabssa-sha384-pss-deterministic-v1`, `ballot_signature` is `ed25519-v1`, `ballot_encryption` is `hpke-p256-hkdf-sha256-aes256gcm-v1` and, in receipt mode full, `receipt_signature` is `ed25519-v1`.
+- **Entry bodies.** The fields of each body are:
+
+  | Entry type | Fields |
+  | --- | --- |
+  | `roll_commit` | `references`: array of 32-byte roll references, strictly ascending |
+  | `issuance` | `roll_reference`, `sequence` counting from 0 |
+  | `registration_close` | `issued` |
+  | `ballot` | `credential_key`, `credential_signature`, `ciphertext`, `signature` |
+  | `voting_close` | `cast` |
+  | `election_key` | `private_key`: the P-256 scalar, 32 bytes |
+  | `ballot_plain` | `ballot`: log index of the ballot entry; and either `ranking` or `invalid` with a reason |
+  | `result` | The tally result: counts, winners, ranking, tie, pairwise matrix, trace and tie-break events |
+
+- **Entry order.** The entries follow the lifecycle: manifest, roll_commit, issuances, registration_close, ballots in leaf-hash order, voting_close, election_key, one ballot_plain per ballot in ballot order, result. Nothing follows the result. A log may end earlier; it is then valid as far as it goes.
+- **Tally input.** The result is computed from the rankings of the ballot_plain entries in log order. The logged result must equal the recomputed one byte for byte.
 - **Signed tree head.** A map with `election_id`, `size`, `root`, `timestamp` in seconds since the Unix epoch, and `signature`. The signature covers the canonical encoding of the array `["stimmig-tree-head-v1", election_id, size, root, timestamp]`. Timestamps never decrease from one tree head to the next.
 - **Export.** The export is a sequence of canonical items (RFC 8742), so it can be written and checked as a stream. The first item is the header `{"format": "stimmig-log-export-v1"}`. Each further item is a record, `["entry", entry]` or `["tree_head", tree head]`. Entries appear in log order, each tree head follows directly after the last entry it covers, and the last record is a tree head.
 - **JSON rendering.** Byte strings are shown as hexadecimal text. The rendering cannot be converted back.
@@ -330,6 +365,8 @@ Deployment rules:
 - The ballot box and its ingress write no IP addresses or other client identifiers to logs or metrics.
 - A valid credential signature is the ballot box's abuse control, so it needs no IP-based rate limiting.
 - Append ordering is serialised in PostgreSQL, so any replica can accept writes without a separate coordinator.
+- The databases enforce uniqueness themselves: one issuance per roll reference and one ballot per credential are constraints, not read-then-write checks. Every request is checked against the current phase on the server.
+- No service stores a link between a voter and a ballot, not even in encrypted form.
 - Log exports and proofs are immutable once published and can be served from object storage.
 - Signing keys are accessed through an HSM interface (PKCS#11 or a network HSM); a software key store exists for development.
 - Deployment artefacts are a container image and a Helm chart.
@@ -342,7 +379,10 @@ The voting client is a static bundle that does all voter-side cryptography in th
 - **Crypto code.** The client uses the browser's built-in Web Crypto API wherever it offers the algorithm. Operations it lacks, such as RSA blinding or ML-DSA, fall back to the project's Go code compiled to WebAssembly.
 - **Ranking interface.** Drag and drop, with tap-to-rank on touch screens and full keyboard operation. The interface enforces `max_ranks` and shows the ballot for confirmation before submission.
 - **Credential storage.** The credential stays in browser storage between registration and voting. The client offers an encrypted export as file or QR code, for backup and for voting on another device.
-- **Receipt.** In receipt mode full, the receipt can be downloaded, printed or shown as a QR code. The client checks it automatically after the close if the voter returns.
+- **Receipt.** In receipt mode full, the receipt can be downloaded, printed or shown as a QR code. Before the client shows that the ballot is cast, it recomputes the leaf hash itself and checks the receipt signature against the receipt key of the manifest. The client checks the receipt automatically after the close if the voter returns, and then also shows the voter their decrypted ballot from the log.
+- **Key checks.** The client validates the issuing key and the election key of the manifest before it uses them.
+- **Origin protection.** The page that holds the credential has a strict content security policy and loads no third-party scripts. All randomness comes from the browser's cryptographic generator.
+- **Trust statement.** The interface tells the voter that the operator holds the election key until the close, and what the unranked candidates on a ballot mean.
 - **Accessibility and languages.** The target is WCAG 2.1 AA. German and English ship first; all text is translatable.
 - **Admin interface.** A separate authenticated interface manages manifests, rolls and the schedule. It warns when the number of possible ballots exceeds the number of voters.
 
@@ -353,10 +393,10 @@ Correctness of the result rests on public recomputation, so the verifier and the
 The verifier CLI takes a log export and checks, in order:
 
 1. Tree head signatures and consistency between all tree heads.
-2. Every issuance refers to a distinct roll entry.
-3. Cast ≤ issued ≤ eligible.
-4. Every ballot carries a valid registrar signature and ballot signature, and no credential is used twice.
-5. The published election key matches the public key in the manifest, and each plaintext matches its ciphertext.
+2. Every issuance refers to a distinct roll entry, with consecutive sequence numbers.
+3. Cast ≤ issued ≤ eligible, and the logged counts equal the numbers of entries.
+4. Every ballot carries a valid registrar signature and ballot signature, no credential is used twice, and the ballots are in leaf-hash order.
+5. The published election key matches the public key in the manifest, and every ballot has one plaintext entry that equals the recomputed decryption.
 6. The recomputed tally equals the logged result, including tie-break events.
 
 Testing:
@@ -379,7 +419,7 @@ Implementation starts with the parts that are pure and independently testable, a
 1. **M0: Repository.** GitHub repository with this specification as `SPEC.md`, licence, CI and linting.
 2. **M1: Tally library.** All v1 methods, tie-breaking, test vectors and the `tally` command.
 3. **M2: Log.** Canonical encoding, Merkle tree, tree heads, proofs, export format and the `verify` command for log structure.
-4. **M3: Cryptography.** Blind credential, ballot signatures, ballot encryption and key publication. A review of Helios and Elekto comes first (Belenios is done, see section 14).
+4. **M3: Cryptography.** Blind credential, ballot signatures, ballot encryption and key publication. The reviews of Belenios, Helios and Elekto are in section 14.
 5. **M4: Services.** Registrar and ballot box on PostgreSQL, with the email identity plugin. End-to-end election from the command line.
 6. **M5: Web client.** Voting client and admin interface.
 7. **M6: Deployment.** Container image, Helm chart, autoscaling, HSM key store.
@@ -402,4 +442,9 @@ After v1: mixnet profile, SAML and BundID, threshold decryption, blind BLS and p
 - **Trustee key setup.** None in v1: the election key is published at the close, and early decryption is prevented by business logic.
 - **Multi-winner elections.** Both the Schulze ranking and single transferable vote in v1.
 - **Tally rules.** Winning votes as pairwise strength; Droop quota and weighted inclusive Gregory transfers for single transferable vote; equal ranks split a ballot's weight. Details are in section 8.
-- **Existing systems.** Belenios was reviewed from source (4.0.0\~dev, November 2026) and is not used as a base: its credential authority knows the voter-to-credential mapping, storage is file-based on a single node, there is no rank limit, no configurable tie-breaking and no receipt mode, and identity schemes are compiled-in OCaml modules. It remains the reference for the later mixnet profile, for the public archive and in-browser verification, and for the ranking UX of its booth. Its code is AGPL-3.0, so copying it would make the combined work AGPL; it is used as a reference only. Helios and Elekto are still to be studied before M3.
+- **Existing systems.** Belenios was reviewed from source (4.0.0\~dev, November 2026) and is not used as a base: its credential authority knows the voter-to-credential mapping, storage is file-based on a single node, there is no rank limit, no configurable tie-breaking and no receipt mode, and identity schemes are compiled-in OCaml modules. It remains the reference for the later mixnet profile, for the public archive and in-browser verification, and for the ranking UX of its booth. Its code is AGPL-3.0, so copying it would make the combined work AGPL; it is used as a reference only.
+- **Helios review.** Helios was reviewed from source (`benadida/helios-server` 4.0.0, commit `684a7b0`, November 2026; its documentation site was not reachable) and is not used as a base: it offers approval ballots only, the server authenticates the voter when the ballot is cast and stores the ballot under the voter's identity, and by default the operator is the only trustee. Its code is Apache-2.0. Lessons taken: ciphertexts are bound to the credential against ballot copying ([Cortier and Smyth](https://eprint.iacr.org/2012/185)); every signed message has a context text and the election ID, after the weak Fiat-Shamir transform of Helios ([Bernhard, Pereira and Warinschi](https://eprint.iacr.org/2016/771)), which still hashes the commitments alone with SHA-1; keys are validated and malformed ballots are logged as invalid instead of stopping the tally ([Chang-Fong and Essex](https://whisperlab.org/papers/Helios-ACSAC-16.pdf)). The Helios server can cast ballots for voters who abstain; in Stimmig the ballot box cannot, and the registrar can only for roll entries that never register, which the affected voter can see in the log.
+- **Elekto review.** Elekto was reviewed from source (`elekto-io/elekto`, commit `da4c19c`, March 2026) and is not used as a base: the server receives every ballot in clear in the authenticated session, nothing is publicly verifiable, and the operator is fully trusted. Its code is Apache-2.0. It uses Schulze with winning votes and leaves ties unresolved, as Stimmig does by default. Lessons taken: uniqueness is enforced by database constraints and phases are checked on the server (section 10), decrypted rankings are validated strictly, and no voter-to-ballot link is stored. Worth borrowing for the interface: a random candidate order and an explicit "no opinion" wording for unranked candidates.
+- **Message formats.** All signed and encrypted messages have a context text and the election ID (section 5.6). Ballot encryption is HPKE, a standard construction of the ECDH and AES-GCM named before. The credential uses the deterministic RFC 9474 variant, because the message contains a fresh public key; the signature is then a plain RSASSA-PSS signature that browsers verify natively.
+- **Cryptography libraries.** Blind RSA and HPKE come from `github.com/cloudflare/circl`; no primitive is implemented in this project. The golden export in `election/testdata` was checked with an independent Python implementation (`cbor2`, `cryptography`, `pyhpke`): all signatures verify and all ballots decrypt to the logged plaintexts.
+- **Open points from M3.** Re-voting is not implemented. The verifier does not reject two ballots with the same ciphertext, because the binding to the credential makes a copy undecryptable. The reasons that the tally gives for invalid ballots are English text of the Go implementation and part of the result entry, so an independent verifier must reproduce them; fixed reason codes would be better. The blinding state of the circl library cannot be serialised, which the web client needs if issuance uses a full-page redirect (M5). The roll is one log entry, which limits it to about 16 million references in the current decoder settings and makes large rolls a large entry.
