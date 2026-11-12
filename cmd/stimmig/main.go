@@ -1,5 +1,5 @@
 // Command stimmig provides all roles of the platform as subcommands
-// (SPEC.md section 10). Only tally is implemented so far.
+// (SPEC.md section 10). tally and verify are implemented so far.
 package main
 
 import (
@@ -17,8 +17,7 @@ import (
 var pending = map[string]string{
 	"registrar": "M4",
 	"ballotbox": "M4",
-	"log":       "M2",
-	"verify":    "M2",
+	"log":       "M4",
 }
 
 func main() {
@@ -30,8 +29,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		usage(stderr)
 		return 2
 	}
-	if args[0] == "tally" {
+	switch args[0] {
+	case "tally":
 		return runTally(args[1:], stdout, stderr)
+	case "verify":
+		return runVerify(args[1:], stdout, stderr)
 	}
 	if m, ok := pending[args[0]]; ok {
 		_, _ = fmt.Fprintf(stderr, "stimmig %s: not implemented yet (milestone %s)\n", args[0], m)
