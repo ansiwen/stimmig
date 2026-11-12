@@ -119,14 +119,21 @@ func BallotLeaf(b Ballot) (merkle.Hash, error) {
 	return merkle.LeafHash(data), nil
 }
 
+// RollRecord returns the roll_commit record for the roll references, which
+// it sorts.
+func RollRecord(references [][]byte) (publog.Record, error) {
+	refs := append([][]byte{}, references...) // not nil: an empty roll is an empty array
+	sort.Slice(refs, func(i, j int) bool { return bytes.Compare(refs[i], refs[j]) < 0 })
+	return publog.Record{Type: publog.TypeRollCommit, Body: RollCommit{References: refs}}, checkRoll(refs)
+}
+
 // PublishRoll appends the roll_commit entry and signs a tree head.
 func PublishRoll(ctx context.Context, l *publog.Log, references [][]byte) error {
-	refs := append([][]byte(nil), references...)
-	sort.Slice(refs, func(i, j int) bool { return bytes.Compare(refs[i], refs[j]) < 0 })
-	if err := checkRoll(refs); err != nil {
+	rec, err := RollRecord(references)
+	if err != nil {
 		return err
 	}
-	return appendAndSign(ctx, l, publog.TypeRollCommit, RollCommit{References: refs})
+	return appendAndSign(ctx, l, rec.Type, rec.Body)
 }
 
 func checkRoll(refs [][]byte) error {
