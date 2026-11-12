@@ -14,7 +14,8 @@ The project follows the milestones of SPEC.md section 13.
 | M2: Log | Done; the log is in memory until the services arrive in M4 |
 | M3: Cryptography | Done |
 | M4: Services | Done; see the open points in SPEC.md section 14 |
-| M5 to M8 | Not started |
+| M5: Web client | Voting client done; the admin interface is the command line |
+| M6 to M8 | Not started |
 
 ## Tally
 
@@ -140,6 +141,19 @@ go run ./cmd/stimmig verify election.cbor
 ```
 
 The service interfaces are in [SPEC.md](SPEC.md) section 10.
+
+## Voting in the browser
+
+`make web` builds the voting client into `web/dist`. Start the ballot box
+with `STIMMIG_CLIENT_DIR=web/dist`, and give voters a link that names the
+election, the log and the registrar:
+
+```
+http://127.0.0.1:8083/?election=<ID>&log=http://127.0.0.1:8081&registrar=http://127.0.0.1:8082
+```
+
+The page runs the same client code as `stimmig client`, compiled to
+WebAssembly.
 
 ## Tests
 
