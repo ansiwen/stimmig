@@ -1,0 +1,9 @@
+{
+  "description": "Perfect two-way tie with the default chain (first-ranks, declare-tie): the tie is reported and nobody wins.",
+  "manifest": {"candidates": ["A", "B"], "method": "schulze"},
+  "ballots": [
+    {"count": 1, "ranking": [["A"],["B"]]},
+    {"count": 1, "ranking": [["B"],["A"]]}
+  ],
+  "expect": {"winners": [], "ranking": [["A","B"]], "tie": ["A","B"], "tie_break_rules": ["first-ranks", "declare-tie"]}
+}

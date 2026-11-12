@@ -1,0 +1,15 @@
+{
+  "description": "Two seats from the top places of the Schulze ranking (same ballots as schulze-wikipedia).",
+  "manifest": {"candidates": ["A", "B", "C", "D", "E"], "method": "schulze", "seats": 2},
+  "ballots": [
+    {"count": 5, "ranking": [["A"],["C"],["B"],["E"],["D"]]},
+    {"count": 5, "ranking": [["A"],["D"],["E"],["C"],["B"]]},
+    {"count": 8, "ranking": [["B"],["E"],["D"],["A"],["C"]]},
+    {"count": 3, "ranking": [["C"],["A"],["B"],["E"],["D"]]},
+    {"count": 7, "ranking": [["C"],["A"],["E"],["B"],["D"]]},
+    {"count": 2, "ranking": [["C"],["B"],["A"],["D"],["E"]]},
+    {"count": 7, "ranking": [["D"],["C"],["E"],["B"],["A"]]},
+    {"count": 8, "ranking": [["E"],["B"],["A"],["D"],["C"]]}
+  ],
+  "expect": {"winners": ["E", "A"], "ranking": [["E"],["A"],["C"],["B"],["D"]]}
+}

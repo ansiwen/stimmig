@@ -1,0 +1,9 @@
+{
+  "description": "The same perfect tie, decided by the fixed order B, A.",
+  "manifest": {"candidates": ["A", "B"], "method": "schulze", "tie_break": ["first-ranks", "fixed-order"], "fixed_order": ["B", "A"]},
+  "ballots": [
+    {"count": 1, "ranking": [["A"],["B"]]},
+    {"count": 1, "ranking": [["B"],["A"]]}
+  ],
+  "expect": {"winners": ["B"], "ranking": [["B"],["A"]], "tie_break_rules": ["first-ranks", "fixed-order"]}
+}

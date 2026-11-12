@@ -173,6 +173,10 @@ func Tally(m Manifest, ballots []Ballot) (*Result, error) {
 	}
 	e.load(ballots)
 	e.res.Trace = append(e.res.Trace, Step{Op: "pairwise", Matrix: e.d})
+	switch m.Method {
+	case Schulze:
+		e.schulze()
+	}
 	return e.res, nil
 }
 
@@ -382,4 +386,72 @@ func ballotKey(ranks [][]int) string {
 		sb.WriteByte('|')
 	}
 	return sb.String()
+}
+
+func (e *election) names(cs []int) []string {
+	out := make([]string, len(cs))
+	for i, c := range cs {
+		out[i] = e.m.Candidates[c]
+	}
+	return out
+}
+
+func (e *election) nameTiers(tiers [][]int) [][]string {
+	out := make([][]string, len(tiers))
+	for i, t := range tiers {
+		out[i] = e.names(t)
+	}
+	return out
+}
+
+func (e *election) all() []int {
+	cs := make([]int, e.n)
+	for i := range cs {
+		cs[i] = i
+	}
+	return cs
+}
+
+// tiersBy sorts candidates into groups, best first. cmp returns a negative
+// number when a is better than b and zero when they are tied. cmp must be a
+// weak order.
+func tiersBy(cs []int, cmp func(a, b int) int) [][]int {
+	s := append([]int(nil), cs...)
+	sort.Ints(s)
+	sort.SliceStable(s, func(i, j int) bool { return cmp(s[i], s[j]) < 0 })
+	var out [][]int
+	for i, c := range s {
+		if i > 0 && cmp(s[i-1], c) == 0 {
+			out[len(out)-1] = append(out[len(out)-1], c)
+		} else {
+			out = append(out, []int{c})
+		}
+	}
+	return out
+}
+
+// finish breaks the ties inside the tiers of a ranking, stores the ranking
+// and derives the winners from it.
+func (e *election) finish(tiers [][]int) {
+	var final [][]int
+	for _, t := range tiers {
+		if len(t) > 1 {
+			final = append(final, e.breakTie(t, "ranking", 0)...)
+		} else {
+			final = append(final, t)
+		}
+	}
+	e.res.Ranking = e.nameTiers(final)
+	placed := 0
+	for _, t := range final {
+		if placed >= e.seats {
+			break
+		}
+		if placed+len(t) > e.seats {
+			e.res.Tie = &Tie{Context: "ranking", Candidates: e.names(t)}
+			break
+		}
+		e.res.Winners = append(e.res.Winners, e.names(t)...)
+		placed += len(t)
+	}
 }

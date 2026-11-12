@@ -1,0 +1,15 @@
+{
+  "description": "Example from the Wikipedia article on the Schulze method: 45 voters, 5 candidates.",
+  "manifest": {"candidates": ["A", "B", "C", "D", "E"], "method": "schulze"},
+  "ballots": [
+    {"count": 5, "ranking": [["A"],["C"],["B"],["E"],["D"]]},
+    {"count": 5, "ranking": [["A"],["D"],["E"],["C"],["B"]]},
+    {"count": 8, "ranking": [["B"],["E"],["D"],["A"],["C"]]},
+    {"count": 3, "ranking": [["C"],["A"],["B"],["E"],["D"]]},
+    {"count": 7, "ranking": [["C"],["A"],["E"],["B"],["D"]]},
+    {"count": 2, "ranking": [["C"],["B"],["A"],["D"],["E"]]},
+    {"count": 7, "ranking": [["D"],["C"],["E"],["B"],["A"]]},
+    {"count": 8, "ranking": [["E"],["B"],["A"],["D"],["C"]]}
+  ],
+  "expect": {"winners": ["E"], "ranking": [["E"],["A"],["C"],["B"],["D"]]}
+}
