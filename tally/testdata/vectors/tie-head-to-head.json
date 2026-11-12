@@ -1,0 +1,9 @@
+{
+  "description": "Borda scores: A 4, B 4, C 1. Head-to-head breaks the tie: A beats B 2 to 1.",
+  "manifest": {"candidates": ["A", "B", "C"], "method": "borda", "tie_break": ["head-to-head", "declare-tie"]},
+  "ballots": [
+    {"count": 2, "ranking": [["A"],["B"],["C"]]},
+    {"count": 1, "ranking": [["B"],["C"],["A"]]}
+  ],
+  "expect": {"winners": ["A"], "ranking": [["A"],["B"],["C"]], "tie_break_rules": ["head-to-head"]}
+}

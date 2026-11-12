@@ -1,0 +1,6 @@
+{
+  "description": "Tennessee capital example: Memphis, Nashville, Chattanooga, Knoxville. Nashville is the Condorcet winner. Scores: N 194, C 173, M 126, K 107.",
+  "manifest": {"candidates": ["M", "N", "C", "K"], "method": "borda"},
+  "ballots": [{"count":42,"ranking":[["M"],["N"],["C"],["K"]]},{"count":26,"ranking":[["N"],["C"],["K"],["M"]]},{"count":15,"ranking":[["C"],["K"],["N"],["M"]]},{"count":17,"ranking":[["K"],["C"],["N"],["M"]]}],
+  "expect": {"winners": ["N"], "ranking": [["N"],["C"],["M"],["K"]]}
+}

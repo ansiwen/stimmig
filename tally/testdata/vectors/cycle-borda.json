@@ -1,0 +1,6 @@
+{
+  "description": "Condorcet cycle: A beats B 6 to 3, B beats C 7 to 2, C beats A 5 to 4. Scores: A 10, B 10, C 7; first ranks break the tie between A and B.",
+  "manifest": {"candidates": ["A", "B", "C"], "method": "borda"},
+  "ballots": [{"count":4,"ranking":[["A"],["B"],["C"]]},{"count":3,"ranking":[["B"],["C"],["A"]]},{"count":2,"ranking":[["C"],["A"],["B"]]}],
+  "expect": {"winners": ["A"], "ranking": [["A"],["B"],["C"]], "tie_break_rules": ["first-ranks"]}
+}

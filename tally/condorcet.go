@@ -1,5 +1,7 @@
 package tally
 
+import "math/big"
+
 // schulze ranks by strongest paths. The strength of a pairwise win is its
 // number of winning votes.
 func (e *election) schulze() {
@@ -60,4 +62,51 @@ func peel(cs []int, beats func(a, b int) bool) [][]int {
 		rem = rest
 	}
 	return tiers
+}
+
+// copeland ranks by pairwise wins minus pairwise losses.
+func (e *election) copeland() {
+	score := make([]int, e.n)
+	for i := 0; i < e.n; i++ {
+		for j := 0; j < e.n; j++ {
+			switch {
+			case e.d[i][j] > e.d[j][i]:
+				score[i]++
+			case e.d[i][j] < e.d[j][i]:
+				score[i]--
+			}
+		}
+	}
+	e.scoreStep("copeland-scores", score, 1)
+	e.finish(tiersBy(e.all(), func(a, b int) int { return score[b] - score[a] }))
+}
+
+// minimax ranks by the largest pairwise defeat, measured in the winning
+// votes of the opponent. The smallest value is best.
+func (e *election) minimax() {
+	worst := make([]int, e.n)
+	for i := 0; i < e.n; i++ {
+		for j := 0; j < e.n; j++ {
+			if e.d[j][i] > e.d[i][j] && e.d[j][i] > worst[i] {
+				worst[i] = e.d[j][i]
+			}
+		}
+	}
+	e.scoreStep("minimax-worst-defeats", worst, 1)
+	e.finish(tiersBy(e.all(), func(a, b int) int { return worst[a] - worst[b] }))
+}
+
+// borda ranks by Borda score: one point for every candidate ranked below,
+// half a point for every candidate tied with.
+func (e *election) borda() {
+	e.scoreStep("borda-scores", e.borda2, 2)
+	e.finish(tiersBy(e.all(), func(a, b int) int { return e.borda2[b] - e.borda2[a] }))
+}
+
+func (e *election) scoreStep(op string, score []int, denom int64) {
+	vals := make([]Value, e.n)
+	for i, s := range score {
+		vals[i] = Value{Candidate: e.m.Candidates[i], Value: big.NewRat(int64(s), denom).RatString()}
+	}
+	e.res.Trace = append(e.res.Trace, Step{Op: op, Values: vals})
 }
