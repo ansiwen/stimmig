@@ -84,7 +84,7 @@ func (s *Server) Handler() http.Handler {
 			mux.Handle("/v1/identity/"+id, h)
 		}
 	}
-	return mux
+	return api.CORS(mux)
 }
 
 func (s *Server) admin(fn func(w http.ResponseWriter, r *http.Request) (any, error)) http.HandlerFunc {

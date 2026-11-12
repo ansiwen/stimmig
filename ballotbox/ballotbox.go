@@ -66,7 +66,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/elections/{id}/close", api.Admin(s.AdminToken, s.close))
 	mux.HandleFunc("POST /v1/elections/{id}/ballots", api.Handle(s.cast))
 	mux.HandleFunc("GET /v1/elections/{id}", api.Handle(s.status))
-	return mux
+	return api.CORS(mux)
 }
 
 func electionID(r *http.Request) (merkle.Hash, error) {

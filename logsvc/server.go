@@ -50,7 +50,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/elections/{id}/export", s.export)
 	mux.HandleFunc("GET /v1/elections/{id}/inclusion", s.inclusion)
 	mux.HandleFunc("GET /v1/elections/{id}/consistency", s.consistency)
-	return mux
+	return api.CORS(mux)
 }
 
 // fail maps an error to a response.

@@ -200,3 +200,20 @@ func InTx(ctx context.Context, db *sql.DB, fn func(tx *sql.Tx) error) error {
 	}
 	return tx.Commit()
 }
+
+// CORS lets pages of other origins call the service. The voting client is
+// served from the ballot box and calls the registrar and the log. Requests
+// carry no cookies, and the Authorization header is not allowed, so the
+// admin calls stay closed to browsers.
+func CORS(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		if r.Method == http.MethodOptions {
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
