@@ -64,6 +64,12 @@ var PollInterval = 2 * time.Second
 
 func (st *State) id() merkle.Hash { return merkle.Hash(st.ElectionID) }
 
+// Log fetches the public log of the state's election and verifies it
+// completely.
+func Log(ctx context.Context, st *State) (*election.Report, error) {
+	return st.log(ctx)
+}
+
 // log fetches the public log and verifies it completely. The client trusts
 // nothing of an election but its ID.
 func (st *State) log(ctx context.Context) (*election.Report, error) {
