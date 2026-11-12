@@ -1,5 +1,5 @@
 // Command stimmig provides all roles of the platform as subcommands
-// (SPEC.md section 10). tally and verify are implemented so far.
+// (SPEC.md section 10).
 package main
 
 import (
@@ -11,14 +11,6 @@ import (
 
 	"github.com/ansiwen/stimmig/tally"
 )
-
-// pending maps the subcommands that are not implemented yet to the
-// milestone that brings them.
-var pending = map[string]string{
-	"registrar": "M4",
-	"ballotbox": "M4",
-	"log":       "M4",
-}
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -34,10 +26,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runTally(args[1:], stdout, stderr)
 	case "verify":
 		return runVerify(args[1:], stdout, stderr)
-	}
-	if m, ok := pending[args[0]]; ok {
-		_, _ = fmt.Fprintf(stderr, "stimmig %s: not implemented yet (milestone %s)\n", args[0], m)
-		return 2
+	case "log", "registrar", "ballotbox":
+		return runServe(args[0], stderr)
+	case "admin":
+		return runAdmin(args[1:], stdout, stderr)
+	case "client":
+		return runClient(args[1:], stdout, stderr)
 	}
 	usage(stderr)
 	return 2
@@ -45,7 +39,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 func usage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "usage: stimmig <command> [flags]")
-	_, _ = fmt.Fprintln(w, "commands: tally, registrar, ballotbox, log, verify")
+	_, _ = fmt.Fprintln(w, "services: log, registrar, ballotbox")
+	_, _ = fmt.Fprintln(w, "tools:    admin, client, verify, tally")
 }
 
 func runTally(args []string, stdout, stderr io.Writer) int {
