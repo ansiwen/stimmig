@@ -20,6 +20,7 @@ jobs:
       - run: go test -race ./...
       - run: go test ./tally -run '^$' -fuzz FuzzTally -fuzztime 30s
       - run: go test ./canon -run '^$' -fuzz FuzzCheck -fuzztime 30s
+      - run: go test ./publog -run '^$' -fuzz FuzzVerify -fuzztime 30s
 
   lint:
     runs-on: ubuntu-latest
