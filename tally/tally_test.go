@@ -290,6 +290,12 @@ func TestInvalidManifests(t *testing.T) {
 			t.Errorf("manifest %d accepted: %+v", i, m)
 		}
 	}
+	if err := (Manifest{Candidates: ab, Method: Schulze}).Validate(); err != nil {
+		t.Error(err)
+	}
+	if (Manifest{Candidates: ab}).Validate() == nil {
+		t.Error("Validate accepted a manifest without method")
+	}
 }
 
 // Ranked pairs with equally strong wins that conflict: the three-way cycle

@@ -190,6 +190,12 @@ func Tally(m Manifest, ballots []Ballot) (*Result, error) {
 	return e.res, nil
 }
 
+// Validate reports whether the manifest is usable for a tally.
+func (m Manifest) Validate() error {
+	_, err := newElection(m)
+	return err
+}
+
 func newElection(m Manifest) (*election, error) {
 	n := len(m.Candidates)
 	if n == 0 {
