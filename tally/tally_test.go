@@ -140,3 +140,27 @@ func TestInvalidManifests(t *testing.T) {
 		}
 	}
 }
+
+// Ranked pairs with equally strong wins that conflict: the three-way cycle
+// A>B, B>C, C>A, each 2 to 1.
+func TestRankedPairsPairOrder(t *testing.T) {
+	cands := []string{"A", "B", "C"}
+	ballots := []Ballot{
+		{{"A"}, {"B"}, {"C"}},
+		{{"B"}, {"C"}, {"A"}},
+		{{"C"}, {"A"}, {"B"}},
+	}
+	res, _ := Tally(Manifest{Candidates: cands, Method: RankedPairs}, ballots)
+	if res.Tie == nil || res.Tie.Context != "pair-order" || len(res.Winners) != 0 {
+		t.Fatalf("want an unresolved pair-order tie, got winners %v, tie %+v", res.Winners, res.Tie)
+	}
+	// Order C, B, A: C>A is locked first, then B>C; A>B is skipped.
+	res, _ = Tally(Manifest{
+		Candidates: cands, Method: RankedPairs,
+		TieBreak: []TieBreakRule{FixedOrder}, FixedOrder: []string{"C", "B", "A"},
+	}, ballots)
+	want := [][]string{{"B"}, {"C"}, {"A"}}
+	if !reflect.DeepEqual(res.Ranking, want) || res.Tie != nil {
+		t.Fatalf("ranking %v, want %v", res.Ranking, want)
+	}
+}

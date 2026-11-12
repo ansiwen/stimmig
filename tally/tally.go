@@ -176,6 +176,8 @@ func Tally(m Manifest, ballots []Ballot) (*Result, error) {
 	switch m.Method {
 	case Schulze:
 		e.schulze()
+	case RankedPairs:
+		e.rankedPairs()
 	case Minimax:
 		e.minimax()
 	case Copeland:
