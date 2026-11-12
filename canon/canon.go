@@ -19,6 +19,9 @@ import (
 	"github.com/fxamacker/cbor/v2"
 )
 
+// MaxArrayElements is the largest number of elements in one array.
+const MaxArrayElements = 1 << 24
+
 var (
 	encMode cbor.EncMode
 	decMode cbor.DecMode
@@ -38,7 +41,9 @@ func init() {
 		TagsMd:            cbor.TagsForbidden,
 		ExtraReturnErrors: cbor.ExtraDecErrorUnknownField,
 		UTF8:              cbor.UTF8RejectInvalid,
-		DefaultMapType:    nil,
+		// The electoral roll is one array; the library default of 131072
+		// elements would be too small for large electorates.
+		MaxArrayElements: MaxArrayElements,
 	}.DecMode()
 	if err != nil {
 		panic(err)

@@ -151,3 +151,15 @@ func TestSequenceReader(t *testing.T) {
 		}
 	}
 }
+
+// Arrays larger than the library default of 131072 elements are accepted,
+// as a large electoral roll needs.
+func TestLargeArray(t *testing.T) {
+	data, err := Marshal(make([]int, 200000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Check(data); err != nil {
+		t.Fatal(err)
+	}
+}
