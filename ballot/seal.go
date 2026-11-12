@@ -5,6 +5,7 @@
 package ballot
 
 import (
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"io"
@@ -87,15 +88,22 @@ func MatchElectionKey(public, private []byte) error {
 	return nil
 }
 
-// sealInfo binds a ciphertext to one election.
-func sealInfo(electionID merkle.Hash) ([]byte, error) {
-	return canon.Marshal([]any{sealContext, electionID[:]})
+// sealInfo binds a ciphertext to one election and one credential. A
+// ciphertext that is copied into the ballot of another credential does not
+// decrypt, so nobody can repeat another voter's ballot.
+func sealInfo(electionID merkle.Hash, credentialKey []byte) ([]byte, error) {
+	if len(credentialKey) != ed25519.PublicKeySize {
+		return nil, errors.New("ballot: credential key has the wrong size")
+	}
+	return canon.Marshal([]any{sealContext, electionID[:], credentialKey})
 }
 
-// Seal encrypts a ranking to the election key. The ciphertext is the HPKE
-// encapsulated key followed by the AEAD ciphertext of the canonically
-// encoded ranking.
-func Seal(random io.Reader, electionID merkle.Hash, electionKey []byte, ranking tally.Ballot) ([]byte, error) {
+// Seal encrypts a ranking to the election key for the ballot of one
+// credential. The ciphertext is the HPKE encapsulated key followed by the
+// AEAD ciphertext of the canonically encoded ranking. The HPKE info is the
+// canonical encoding of ["stimmig-ballot-encryption-v1", election_id,
+// credential_public_key].
+func Seal(random io.Reader, electionID merkle.Hash, electionKey []byte, credentialKey ed25519.PublicKey, ranking tally.Ballot) ([]byte, error) {
 	pk, err := parsePublic(electionKey)
 	if err != nil {
 		return nil, err
@@ -107,7 +115,7 @@ func Seal(random io.Reader, electionID merkle.Hash, electionKey []byte, ranking 
 	if err != nil {
 		return nil, err
 	}
-	info, err := sealInfo(electionID)
+	info, err := sealInfo(electionID, credentialKey)
 	if err != nil {
 		return nil, err
 	}
@@ -126,17 +134,17 @@ func Seal(random io.Reader, electionID merkle.Hash, electionKey []byte, ranking 
 	return append(enc, ct...), nil
 }
 
-// Open decrypts a ciphertext with the published election private key. It
-// returns ErrDecrypt or ErrMalformed for ballots that must be logged as
-// invalid.
-func Open(electionID merkle.Hash, private, ciphertext []byte) (tally.Ballot, error) {
+// Open decrypts the ciphertext of a credential's ballot with the published
+// election private key. It returns ErrDecrypt or ErrMalformed for ballots
+// that must be logged as invalid.
+func Open(electionID merkle.Hash, private []byte, credentialKey ed25519.PublicKey, ciphertext []byte) (tally.Ballot, error) {
 	sk, err := kemScheme.UnmarshalBinaryPrivateKey(private)
 	if err != nil {
 		return nil, fmt.Errorf("ballot: election private key: %w", err)
 	}
-	info, err := sealInfo(electionID)
+	info, err := sealInfo(electionID, credentialKey)
 	if err != nil {
-		return nil, err
+		return nil, ErrDecrypt
 	}
 	if len(ciphertext) < encSize {
 		return nil, ErrDecrypt

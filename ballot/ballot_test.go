@@ -15,8 +15,10 @@ import (
 )
 
 var (
-	id      = merkle.LeafHash([]byte("election"))
-	otherID = merkle.LeafHash([]byte("other election"))
+	id        = merkle.LeafHash([]byte("election"))
+	otherID   = merkle.LeafHash([]byte("other election"))
+	cred      = ed25519.PublicKey(bytes.Repeat([]byte{1}, ed25519.PublicKeySize))
+	otherCred = ed25519.PublicKey(bytes.Repeat([]byte{2}, ed25519.PublicKeySize))
 )
 
 func keys(t *testing.T) (public, private []byte) {
@@ -36,11 +38,11 @@ func TestSealOpen(t *testing.T) {
 		{},
 		nil,
 	} {
-		ct, err := Seal(rand.Reader, id, pub, ranking)
+		ct, err := Seal(rand.Reader, id, pub, cred, ranking)
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err := Open(id, priv, ct)
+		got, err := Open(id, priv, cred, ct)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -52,7 +54,7 @@ func TestSealOpen(t *testing.T) {
 			t.Errorf("got %v, want %v", got, want)
 		}
 		// Encryption is randomised.
-		again, _ := Seal(rand.Reader, id, pub, ranking)
+		again, _ := Seal(rand.Reader, id, pub, cred, ranking)
 		if bytes.Equal(ct, again) {
 			t.Error("two ciphertexts of the same ranking are equal")
 		}
@@ -62,7 +64,7 @@ func TestSealOpen(t *testing.T) {
 func TestOpenRejects(t *testing.T) {
 	pub, priv := keys(t)
 	_, otherPriv := keys(t)
-	ct, err := Seal(rand.Reader, id, pub, tally.Ballot{{"A"}})
+	ct, err := Seal(rand.Reader, id, pub, cred, tally.Ballot{{"A"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,6 +72,17 @@ func TestOpenRejects(t *testing.T) {
 		c := append([]byte(nil), ct...)
 		c[i] ^= 1
 		return c
+	}
+	// A ciphertext copied into the ballot of another credential does not
+	// decrypt.
+	if _, err := Open(id, priv, otherCred, ct); !errors.Is(err, ErrDecrypt) {
+		t.Errorf("other credential: got %v, want ErrDecrypt", err)
+	}
+	if _, err := Open(id, priv, cred[:31], ct); !errors.Is(err, ErrDecrypt) {
+		t.Errorf("short credential key: got %v, want ErrDecrypt", err)
+	}
+	if _, err := Seal(rand.Reader, id, pub, cred[:31], tally.Ballot{}); err == nil {
+		t.Error("sealed for a short credential key")
 	}
 	cases := map[string]struct {
 		id   merkle.Hash
@@ -86,11 +99,11 @@ func TestOpenRejects(t *testing.T) {
 		"empty":                 {id, priv, nil},
 	}
 	for name, c := range cases {
-		if _, err := Open(c.id, c.priv, c.ct); !errors.Is(err, ErrDecrypt) {
+		if _, err := Open(c.id, c.priv, cred, c.ct); !errors.Is(err, ErrDecrypt) {
 			t.Errorf("%s: got %v, want ErrDecrypt", name, err)
 		}
 	}
-	if _, err := Open(id, priv[:31], ct); err == nil || errors.Is(err, ErrDecrypt) {
+	if _, err := Open(id, priv[:31], cred, ct); err == nil || errors.Is(err, ErrDecrypt) {
 		t.Errorf("malformed private key: %v", err)
 	}
 }
@@ -99,7 +112,7 @@ func TestOpenRejects(t *testing.T) {
 func sealRaw(t *testing.T, pub, plain []byte) []byte {
 	t.Helper()
 	pk, _ := parsePublic(pub)
-	info, _ := sealInfo(id)
+	info, _ := sealInfo(id, cred)
 	sender, err := suite.NewSender(pk, info)
 	if err != nil {
 		t.Fatal(err)
@@ -137,7 +150,7 @@ func TestOpenMalformed(t *testing.T) {
 		"two items":        append(enc([][]string{{"A"}}), enc([][]string{{"B"}})...),
 	}
 	for name, plain := range plains {
-		if _, err := Open(id, priv, sealRaw(t, pub, plain)); !errors.Is(err, ErrMalformed) {
+		if _, err := Open(id, priv, cred, sealRaw(t, pub, plain)); !errors.Is(err, ErrMalformed) {
 			t.Errorf("%s: got %v, want ErrMalformed", name, err)
 		}
 	}
@@ -174,7 +187,7 @@ func TestElectionKey(t *testing.T) {
 		if CheckElectionKey(bad) == nil {
 			t.Errorf("%s: accepted", name)
 		}
-		if _, err := Seal(rand.Reader, id, bad, tally.Ballot{}); err == nil {
+		if _, err := Seal(rand.Reader, id, bad, cred, tally.Ballot{}); err == nil {
 			t.Errorf("%s: sealed", name)
 		}
 	}
