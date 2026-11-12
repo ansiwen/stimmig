@@ -126,3 +126,36 @@ func TestConsistencyDetectsRewrite(t *testing.T) {
 		t.Fatal("rewritten history accepted")
 	}
 }
+
+func TestTreeMarshal(t *testing.T) {
+	var tree Tree
+	for n := 0; n <= 70; n++ {
+		data, err := tree.MarshalBinary()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var back Tree
+		if err := back.UnmarshalBinary(data); err != nil {
+			t.Fatalf("n=%d: %v", n, err)
+		}
+		if back.Size() != tree.Size() || back.Root() != tree.Root() {
+			t.Fatalf("n=%d: restored tree differs", n)
+		}
+		// The restored tree grows like the original.
+		leaf := LeafHash([]byte{byte(n)})
+		back.Append(leaf)
+		tree.Append(leaf)
+		if back.Root() != tree.Root() {
+			t.Fatalf("n=%d: restored tree grows differently", n)
+		}
+		if n > 0 {
+			if back.UnmarshalBinary(data[:len(data)-1]) == nil || back.UnmarshalBinary(append(data, 0)) == nil {
+				t.Fatalf("n=%d: malformed state accepted", n)
+			}
+		}
+	}
+	var back Tree
+	if back.UnmarshalBinary([]byte{1, 2, 3}) == nil {
+		t.Fatal("short state accepted")
+	}
+}

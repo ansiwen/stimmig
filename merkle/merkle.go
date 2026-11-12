@@ -6,6 +6,7 @@ package merkle
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"math/bits"
 )
@@ -222,6 +223,37 @@ func VerifyConsistency(oldSize, newSize uint64, oldRoot, newRoot Hash, proof []H
 	}
 	if sr != newRoot {
 		return errors.New("merkle: consistency proof does not match the new root")
+	}
+	return nil
+}
+
+// MarshalBinary encodes the state of the tree: the size in 8 bytes,
+// big-endian, followed by the subtree roots. A log stores it to append
+// without reading the earlier leaves.
+func (t Tree) MarshalBinary() ([]byte, error) {
+	out := make([]byte, 8, 8+len(t.stack)*HashSize)
+	binary.BigEndian.PutUint64(out, t.size)
+	for _, h := range t.stack {
+		out = append(out, h[:]...)
+	}
+	return out, nil
+}
+
+// UnmarshalBinary restores a tree from MarshalBinary. A tree of n leaves
+// has one subtree root per one bit of n.
+func (t *Tree) UnmarshalBinary(data []byte) error {
+	if len(data) < 8 {
+		return errors.New("merkle: tree state is too short")
+	}
+	size := binary.BigEndian.Uint64(data)
+	rest := data[8:]
+	if len(rest) != bits.OnesCount64(size)*HashSize {
+		return errors.New("merkle: tree state has the wrong number of hashes")
+	}
+	t.size = size
+	t.stack = make([]Hash, 0, len(rest)/HashSize)
+	for ; len(rest) > 0; rest = rest[HashSize:] {
+		t.stack = append(t.stack, Hash(rest[:HashSize]))
 	}
 	return nil
 }
