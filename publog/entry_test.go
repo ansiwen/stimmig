@@ -3,10 +3,14 @@ package publog
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/hex"
+	"sync"
 	"testing"
 
+	"github.com/ansiwen/stimmig/ballot"
 	"github.com/ansiwen/stimmig/canon"
+	"github.com/ansiwen/stimmig/credential"
 	"github.com/ansiwen/stimmig/merkle"
 	"github.com/ansiwen/stimmig/tally"
 )
@@ -15,6 +19,21 @@ import (
 func testKey() ed25519.PrivateKey {
 	return ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, ed25519.SeedSize))
 }
+
+// testKeys creates the slow keys once per test run.
+var testKeys = sync.OnceValue(func() (k struct{ issuing, election, electionPrivate []byte }) {
+	sk, err := credential.GenerateIssuingKey(rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	if k.issuing, err = credential.MarshalIssuingKey(&sk.PublicKey); err != nil {
+		panic(err)
+	}
+	if k.election, k.electionPrivate, err = ballot.GenerateElectionKey(); err != nil {
+		panic(err)
+	}
+	return k
+})
 
 func testManifest() Manifest {
 	return Manifest{
@@ -26,8 +45,12 @@ func testManifest() Manifest {
 			Method:     tally.Schulze,
 			MaxRanks:   2,
 		},
-		Algorithms: Algorithms{LogHash: AlgLogHash, TreeHead: AlgTreeHead},
-		LogKey:     testKey().Public().(ed25519.PublicKey),
+		Algorithms:  DefaultAlgorithms(ReceiptFull),
+		ReceiptMode: ReceiptFull,
+		LogKey:      testKey().Public().(ed25519.PublicKey),
+		IssuingKey:  testKeys().issuing,
+		ElectionKey: testKeys().election,
+		ReceiptKey:  testKey().Public().(ed25519.PublicKey),
 	}
 }
 
@@ -44,6 +67,18 @@ func TestManifestValidate(t *testing.T) {
 		"tally":        func(m *Manifest) { m.Tally.Method = "plurality" },
 		"no tally":     func(m *Manifest) { m.Tally = tally.Manifest{} },
 		"no algorithm": func(m *Manifest) { m.Algorithms = Algorithms{} },
+		"credential":   func(m *Manifest) { m.Algorithms.Credential = "blind-schnorr-v1" },
+		"encryption":   func(m *Manifest) { m.Algorithms.BallotEncryption = "none" },
+		"signature":    func(m *Manifest) { m.Algorithms.BallotSignature = "ml-dsa-v1" },
+		"receipt mode": func(m *Manifest) { m.ReceiptMode = "maybe" },
+		"receipt alg":  func(m *Manifest) { m.Algorithms.ReceiptSignature = "" },
+		"receipt key":  func(m *Manifest) { m.ReceiptKey = nil },
+		"issuing key":  func(m *Manifest) { m.IssuingKey = m.IssuingKey[1:] },
+		"election key": func(m *Manifest) { m.ElectionKey = m.ElectionKey[:64] },
+		"none with receipt key": func(m *Manifest) {
+			m.ReceiptMode = ReceiptNone
+			m.Algorithms = DefaultAlgorithms(ReceiptNone)
+		},
 	}
 	for name, change := range bad {
 		m := testManifest()
@@ -51,6 +86,13 @@ func TestManifestValidate(t *testing.T) {
 		if m.Validate() == nil {
 			t.Errorf("%s: invalid manifest accepted", name)
 		}
+	}
+	none := testManifest()
+	none.ReceiptMode = ReceiptNone
+	none.Algorithms = DefaultAlgorithms(ReceiptNone)
+	none.ReceiptKey = nil
+	if err := none.Validate(); err != nil {
+		t.Errorf("receipt mode none: %v", err)
 	}
 }
 

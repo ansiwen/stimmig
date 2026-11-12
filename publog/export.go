@@ -100,8 +100,10 @@ type Report struct {
 // consistent with each other. The bodies of entries other than the manifest
 // are checked by later verification steps.
 //
-// visit, if not nil, is called for every entry after it passed its checks.
-func Verify(r io.Reader, visit func(index uint64, typ string, entry []byte)) (*Report, error) {
+// visit, if not nil, is called for every entry after it passed its checks,
+// with the report as far as it is known. An error from visit stops the
+// verification.
+func Verify(r io.Reader, visit func(rep *Report, index uint64, typ string, body []byte) error) (*Report, error) {
 	seq := canon.NewSequenceReader(r)
 	item, err := seq.Next()
 	if err != nil {
@@ -157,7 +159,9 @@ func Verify(r io.Reader, visit func(index uint64, typ string, entry []byte)) (*R
 			}
 			covered = false
 			if visit != nil {
-				visit(index, typ, rec.Value)
+				if err := visit(rep, index, typ, body); err != nil {
+					return nil, fmt.Errorf("entry %d (%s): %w", index, typ, err)
+				}
 			}
 		case recordTreeHead:
 			var h TreeHead

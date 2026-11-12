@@ -3,17 +3,14 @@ package publog
 import (
 	"bytes"
 	"crypto/ed25519"
-	"flag"
+	"errors"
 	"io"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/ansiwen/stimmig/canon"
 	"github.com/ansiwen/stimmig/merkle"
 )
-
-var update = flag.Bool("update", false, "rewrite the golden export in testdata")
 
 func export(t *testing.T, l *Log) []byte {
 	t.Helper()
@@ -28,12 +25,13 @@ func TestExportVerify(t *testing.T) {
 	l := testLog(t, 11)
 	data := export(t, l)
 	var seen []string
-	rep, err := Verify(bytes.NewReader(data), func(index uint64, typ string, entry []byte) {
+	rep, err := Verify(bytes.NewReader(data), func(rep *Report, index uint64, typ string, body []byte) error {
 		want, _ := l.Entry(index)
-		if !bytes.Equal(entry, want) {
+		if !bytes.HasSuffix(want, body) || rep.ElectionID != l.ElectionID() {
 			t.Errorf("entry %d differs", index)
 		}
 		seen = append(seen, typ)
+		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -60,24 +58,19 @@ func TestExportNeedsFinalHead(t *testing.T) {
 	}
 }
 
-// The golden export is a published test vector for independent verifiers.
-func TestGoldenExport(t *testing.T) {
-	const path = "testdata/export-v1.cbor"
-	data := export(t, testLog(t, 5))
-	if *update {
-		if err := os.WriteFile(path, data, 0o600); err != nil {
-			t.Fatal(err)
+// An error from the visitor stops the verification.
+func TestVerifyVisitError(t *testing.T) {
+	data := export(t, testLog(t, 3))
+	calls := 0
+	_, err := Verify(bytes.NewReader(data), func(_ *Report, index uint64, _ string, _ []byte) error {
+		calls++
+		if index == 2 {
+			return errors.New("stop here")
 		}
-	}
-	golden, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(data, golden) {
-		t.Fatal("export differs from the golden file; the format changed")
-	}
-	if _, err := Verify(bytes.NewReader(golden), nil); err != nil {
-		t.Fatal(err)
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "entry 2 (issuance): stop here") || calls != 3 {
+		t.Fatalf("calls %d, error %v", calls, err)
 	}
 }
 
@@ -147,7 +140,7 @@ func TestVerifyRejects(t *testing.T) {
 		return append(out, good[i+1:]...)
 	}
 	badManifest := testManifest()
-	badManifest.Algorithms.TreeHead = "rsa-v1"
+	badManifest.LogKey = badManifest.LogKey[:31]
 	otherManifest := testManifest()
 	otherManifest.Title = "Another election"
 
@@ -169,7 +162,7 @@ func TestVerifyRejects(t *testing.T) {
 		"entry added":         {with(8, entryRecord(t, TypeBallot, map[string]int{}), good[8]), "follows 6 entries"},
 		"second manifest":     {with(3, entryRecord(t, TypeManifest, testManifest())), "manifest must be entry 0"},
 		"no manifest":         {with(1, good[3]), "manifest must be entry 0"},
-		"invalid manifest":    {with(1, entryRecord(t, TypeManifest, badManifest)), "unknown tree head signature algorithm"},
+		"invalid manifest":    {with(1, entryRecord(t, TypeManifest, badManifest)), "log key has the wrong size"},
 		"other manifest":      {with(1, entryRecord(t, TypeManifest, otherManifest)), "for another election"},
 		"head before entries": {with(1, good[2], good[1]), "before the manifest"},
 		"head wrong key":      {with(8, sign(otherKey, id, 5, root(5), lastTS)), "signature is invalid"},

@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/ansiwen/stimmig/ballot"
 	"github.com/ansiwen/stimmig/canon"
+	"github.com/ansiwen/stimmig/credential"
 	"github.com/ansiwen/stimmig/merkle"
 	"github.com/ansiwen/stimmig/tally"
 )
@@ -50,8 +52,14 @@ const (
 // ManifestVersion is the manifest version this code reads and writes.
 const ManifestVersion = 1
 
-// Manifest is the body of log entry 0. It defines the election. Later
-// milestones add the keys and the schedule of the other services.
+// Receipt modes (SPEC.md section 5.5).
+const (
+	ReceiptFull = "full"
+	ReceiptNone = "none"
+)
+
+// Manifest is the body of log entry 0. It defines the election. The
+// schedule is added with the services.
 type Manifest struct {
 	Version uint64 `cbor:"version"`
 	Title   string `cbor:"title"`
@@ -60,18 +68,49 @@ type Manifest struct {
 	Nonce      []byte         `cbor:"nonce"`
 	Tally      tally.Manifest `cbor:"tally"`
 	Algorithms Algorithms     `cbor:"algorithms"`
-	// LogKey is the public key that signs the tree heads.
+	// ReceiptMode is "full" or "none".
+	ReceiptMode string `cbor:"receipt_mode"`
+	// LogKey is the Ed25519 public key that signs the tree heads.
 	LogKey []byte `cbor:"log_key"`
+	// IssuingKey is the registrar's RSA public key for credentials, as a
+	// DER SubjectPublicKeyInfo.
+	IssuingKey []byte `cbor:"issuing_key"`
+	// ElectionKey is the public key that ballots are encrypted to, as an
+	// uncompressed P-256 point.
+	ElectionKey []byte `cbor:"election_key"`
+	// ReceiptKey is the ballot box's Ed25519 public key for receipts. It is
+	// present exactly in receipt mode full.
+	ReceiptKey []byte `cbor:"receipt_key,omitempty"`
 }
 
 // Algorithms names the algorithms of an election by versioned identifiers.
 type Algorithms struct {
-	LogHash  string `cbor:"log_hash"`
-	TreeHead string `cbor:"tree_head_signature"`
+	LogHash          string `cbor:"log_hash"`
+	TreeHead         string `cbor:"tree_head_signature"`
+	Credential       string `cbor:"credential"`
+	BallotSignature  string `cbor:"ballot_signature"`
+	BallotEncryption string `cbor:"ballot_encryption"`
+	// ReceiptSignature is present exactly in receipt mode full.
+	ReceiptSignature string `cbor:"receipt_signature,omitempty"`
 }
 
-// Validate reports whether the manifest is well-formed and uses only known
-// algorithm identifiers.
+// DefaultAlgorithms returns the v1 algorithms for a receipt mode.
+func DefaultAlgorithms(receiptMode string) Algorithms {
+	a := Algorithms{
+		LogHash:          AlgLogHash,
+		TreeHead:         AlgTreeHead,
+		Credential:       credential.Algorithm,
+		BallotSignature:  ballot.SignatureAlgorithm,
+		BallotEncryption: ballot.EncryptionAlgorithm,
+	}
+	if receiptMode == ReceiptFull {
+		a.ReceiptSignature = ballot.SignatureAlgorithm
+	}
+	return a
+}
+
+// Validate reports whether the manifest is well-formed, uses only known
+// algorithm identifiers and holds well-formed keys.
 func (m Manifest) Validate() error {
 	if m.Version != ManifestVersion {
 		return fmt.Errorf("publog: unknown manifest version %d", m.Version)
@@ -79,14 +118,26 @@ func (m Manifest) Validate() error {
 	if len(m.Nonce) < 16 {
 		return errors.New("publog: manifest nonce is shorter than 16 bytes")
 	}
-	if m.Algorithms.LogHash != AlgLogHash {
-		return fmt.Errorf("publog: unknown log hash algorithm %q", m.Algorithms.LogHash)
+	if m.ReceiptMode != ReceiptFull && m.ReceiptMode != ReceiptNone {
+		return fmt.Errorf("publog: unknown receipt mode %q", m.ReceiptMode)
 	}
-	if m.Algorithms.TreeHead != AlgTreeHead {
-		return fmt.Errorf("publog: unknown tree head signature algorithm %q", m.Algorithms.TreeHead)
+	// Comparing with the defaults rejects every unknown identifier.
+	if m.Algorithms != DefaultAlgorithms(m.ReceiptMode) {
+		return fmt.Errorf("publog: unknown or misplaced algorithm identifier in %+v", m.Algorithms)
 	}
 	if len(m.LogKey) != ed25519.PublicKeySize {
 		return errors.New("publog: log key has the wrong size")
+	}
+	if _, err := credential.ParseIssuingKey(m.IssuingKey); err != nil {
+		return err
+	}
+	if err := ballot.CheckElectionKey(m.ElectionKey); err != nil {
+		return err
+	}
+	if full := m.ReceiptMode == ReceiptFull; full && len(m.ReceiptKey) != ed25519.PublicKeySize {
+		return errors.New("publog: receipt key has the wrong size")
+	} else if !full && len(m.ReceiptKey) != 0 {
+		return errors.New("publog: receipt key in receipt mode none")
 	}
 	return m.Tally.Validate()
 }

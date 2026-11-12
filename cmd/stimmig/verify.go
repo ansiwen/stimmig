@@ -34,12 +34,15 @@ func runVerify(args []string, stdout, stderr io.Writer) int {
 	}
 	defer func() { _ = f.Close() }()
 
-	var visit func(uint64, string, []byte)
+	var visit func(*publog.Report, uint64, string, []byte) error
 	if *dump {
-		visit = func(index uint64, _ string, entry []byte) {
-			if js, err := canon.ToJSON(entry); err == nil {
-				_, _ = fmt.Fprintf(stdout, "entry %d: %s\n", index, js)
+		visit = func(_ *publog.Report, index uint64, typ string, body []byte) error {
+			js, err := canon.ToJSON(body)
+			if err != nil {
+				return err
 			}
+			_, _ = fmt.Fprintf(stdout, "entry %d (%s): %s\n", index, typ, js)
+			return nil
 		}
 	}
 	rep, err := publog.Verify(f, visit)

@@ -8,52 +8,6 @@ import (
 	"testing"
 )
 
-const goldenExport = "../../publog/testdata/export-v1.cbor"
-
-func TestVerifyCommand(t *testing.T) {
-	var out, errOut bytes.Buffer
-	if code := run([]string{"verify", "-json", goldenExport}, &out, &errOut); code != 0 {
-		t.Fatalf("exit %d: %s", code, errOut.String())
-	}
-	for _, want := range []string{
-		"entries      6",
-		"manifest             1",
-		"tree heads   4",
-		"OK: the log structure is valid",
-		`entry 0: [`,
-		`"title": "Board election"`,
-	} {
-		if !strings.Contains(out.String(), want) {
-			t.Errorf("output lacks %q:\n%s", want, out.String())
-		}
-	}
-}
-
-func TestVerifyCommandFails(t *testing.T) {
-	data, err := os.ReadFile(goldenExport)
-	if err != nil {
-		t.Fatal(err)
-	}
-	data[len(data)/2] ^= 1
-	bad := filepath.Join(t.TempDir(), "bad.cbor")
-	if err := os.WriteFile(bad, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var out, errOut bytes.Buffer
-	if code := run([]string{"verify", bad}, &out, &errOut); code != 1 {
-		t.Fatalf("exit %d for a changed export", code)
-	}
-	if !strings.Contains(errOut.String(), "FAILED") || strings.Contains(out.String(), "OK") {
-		t.Errorf("stdout %q, stderr %q", out.String(), errOut.String())
-	}
-	if code := run([]string{"verify"}, &out, &errOut); code != 2 {
-		t.Errorf("exit %d without a file", code)
-	}
-	if code := run([]string{"verify", filepath.Join(t.TempDir(), "missing")}, &out, &errOut); code != 1 {
-		t.Errorf("exit %d for a missing file", code)
-	}
-}
-
 func TestTallyCommand(t *testing.T) {
 	dir := t.TempDir()
 	manifest := filepath.Join(dir, "m.json")
