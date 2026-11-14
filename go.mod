@@ -4,8 +4,11 @@ go 1.25.0
 
 require (
 	github.com/cloudflare/circl v1.6.5
+	github.com/coreos/go-oidc/v3 v3.17.0
 	github.com/fxamacker/cbor/v2 v2.10.0
+	github.com/go-jose/go-jose/v4 v4.1.3
 	github.com/jackc/pgx/v5 v5.13.0
+	golang.org/x/oauth2 v0.28.0
 )
 
 require (
