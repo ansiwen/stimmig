@@ -1,0 +1,63 @@
+image:
+  repository: ghcr.io/ansiwen/stimmig
+  tag: ""  # defaults to the chart's appVersion
+  pullPolicy: IfNotPresent
+
+# The three services. Registrar and ballot box must not share a database,
+# and for the strongest separation they run in different clusters operated
+# by different parties: disable the roles that this release does not run.
+#
+# Every role reads its secrets from an existing Secret, whose keys become
+# environment variables:
+#   all:        STIMMIG_DATABASE_URL, STIMMIG_ADMIN_TOKEN, STIMMIG_KEY_ENCRYPTION_KEY
+#   log:        STIMMIG_REGISTRAR_TOKEN, STIMMIG_BALLOTBOX_TOKEN
+#   registrar:  STIMMIG_LOG_TOKEN, STIMMIG_EMAIL_SECRET
+#   ballotbox:  STIMMIG_LOG_TOKEN
+roles:
+  log:
+    enabled: true
+    existingSecret: stimmig-log
+    # Public host name; an Ingress is created when it is set.
+    host: ""
+    env: {}
+  registrar:
+    enabled: true
+    existingSecret: stimmig-registrar
+    host: ""
+    env:
+      # URL under which voters reach the registrar.
+      STIMMIG_PUBLIC_URL: ""
+      STIMMIG_SMTP_ADDR: ""
+      STIMMIG_SMTP_FROM: ""
+  ballotbox:
+    enabled: true
+    existingSecret: stimmig-ballotbox
+    host: ""
+    env: {}
+
+# URL of the log service for registrar and ballot box. Empty means the log
+# of this release.
+logURL: ""
+
+replicas: 2
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 1Gi
+
+# The ballot box must not record client addresses (SPEC.md section 10):
+# switch off the access log of the ingress controller for its host.
+ingress:
+  className: ""
+  annotations: {}
+  # Name of a TLS secret per role, by role name. Without an entry the
+  # Ingress has no TLS section and relies on the controller's default.
+  tlsSecrets: {}

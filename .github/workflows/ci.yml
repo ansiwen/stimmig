@@ -33,6 +33,7 @@ jobs:
       - run: go test -race ./...
       - run: GOOS=js GOARCH=wasm go vet ./web/wasm
       - run: make web
+      - run: helm lint deploy/helm/stimmig
       - run: go test ./tally -run '^$' -fuzz FuzzTally -fuzztime 30s
       - run: go test ./canon -run '^$' -fuzz FuzzCheck -fuzztime 30s
       - run: go test ./publog -run '^$' -fuzz FuzzVerify -fuzztime 30s
