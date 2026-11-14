@@ -10,15 +10,20 @@ package registrar
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/x509"
 	"database/sql"
 	_ "embed" // for the schema
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"html/template"
+	"math/big"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ansiwen/stimmig/api"
@@ -52,7 +57,8 @@ const (
 //	POST /v1/elections/{id}/close     admin   close registration
 //	POST /v1/elections/{id}/tally     admin   publish key, plaintexts and result
 //	POST /v1/elections/{id}/sessions  voter   start a registration
-//	GET  /v1/callback/{provider}      voter   return from the identity provider
+//	GET  /v1/callback/{provider}      voter   return from the identity provider; asks for the code
+//	POST /v1/confirm                  voter   check the code, issue the credential
 //	GET  /v1/sessions/{session}       voter   fetch the blind signature
 type Server struct {
 	DB *sql.DB
@@ -63,6 +69,9 @@ type Server struct {
 	Providers map[string]identity.Provider
 	// Keys encrypts the private keys at rest. Nil stores them in clear.
 	Keys keystore.Sealer
+	// Secret authenticates the step between login and confirmation. All
+	// replicas share it.
+	Secret []byte
 }
 
 // sealer returns the key store, or the unencrypted one if none is set.
@@ -88,6 +97,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/elections/{id}/tally", s.admin(s.tally))
 	mux.HandleFunc("POST /v1/elections/{id}/sessions", api.Handle(s.newSession))
 	mux.HandleFunc("GET /v1/callback/{provider}", s.callback)
+	mux.HandleFunc("POST /v1/confirm", s.confirm)
 	mux.HandleFunc("GET /v1/sessions/{session}", api.Handle(s.credential))
 	for id, p := range s.Providers {
 		if h, ok := p.(http.Handler); ok {
@@ -373,16 +383,21 @@ func (s *Server) newSession(w http.ResponseWriter, r *http.Request) (any, error)
 		return nil, err
 	}
 	session := hex.EncodeToString(token)
+	n, err := rand.Int(rand.Reader, big.NewInt(100_000_000))
+	if err != nil {
+		return nil, err
+	}
+	code := fmt.Sprintf("%08d", n)
 	if _, err := s.DB.ExecContext(ctx,
-		`INSERT INTO reg_sessions (id, election, blinded, expires) VALUES ($1, $2, $3, $4)`,
-		session, id[:], req.Blinded, time.Now().Add(SessionValidity)); err != nil {
+		`INSERT INTO reg_sessions (id, election, blinded, code, expires) VALUES ($1, $2, $3, $4, $5)`,
+		session, id[:], req.Blinded, code, time.Now().Add(SessionValidity)); err != nil {
 		return nil, err
 	}
 	url, err := provider.Begin(ctx, hex.EncodeToString(id[:]), session)
 	if err != nil {
 		return nil, err
 	}
-	return api.Session{Session: session, URL: url}, nil
+	return api.Session{Session: session, URL: url, Code: code[:4] + " " + code[4:]}, nil
 }
 
 // session returns the election and the blinded value of a live session.
@@ -420,7 +435,59 @@ func (s *Server) Eligible(ctx context.Context, session, provider, subject string
 	return err == nil && found
 }
 
-// callback completes the login and issues the credential.
+// ConfirmValidity is how long the voter has to type the code after the
+// login.
+const ConfirmValidity = 10 * time.Minute
+
+// MaxConfirmAttempts is the number of codes a session may try.
+const MaxConfirmAttempts = 5
+
+// confirmToken carries an authenticated login from the callback to the
+// confirmation.
+type confirmToken struct {
+	_        struct{} `cbor:",toarray"`
+	Context  string
+	Session  string
+	Provider string
+	Subject  string
+	Expires  int64
+}
+
+const confirmContext = "stimmig-confirm-v1"
+
+func (s *Server) mac(msg []byte) []byte {
+	h := hmac.New(sha256.New, s.Secret)
+	h.Write(msg)
+	return h.Sum(nil)
+}
+
+var pages = template.Must(template.New("page").Parse(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voting credential</title></head><body>
+{{if .Token}}<h1>Enter your confirmation code</h1>
+<p>You are logged in. Your voting client shows a confirmation code of 8 digits. Enter it to receive your voting credential in that client.</p>
+<p><strong>If you did not start this in a voting client of your own, close this page.</strong> Somebody else may be trying to obtain your credential.</p>
+<form method="post" action="/v1/confirm">
+<input type="hidden" name="token" value="{{.Token}}">
+<label for="code">Confirmation code</label>
+<input id="code" name="code" inputmode="numeric" autocomplete="off" required>
+<button type="submit">Receive credential</button>
+</form>
+{{else}}<h1>Your voting credential is issued</h1>
+<p role="status">Return to your voting client.</p>
+<p>Your entry in the public electoral roll is <code>{{.Ref}}</code>.</p>
+{{end}}</body></html>`))
+
+func page(w http.ResponseWriter, data map[string]string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; form-action 'self'; frame-ancestors 'none'")
+	_ = pages.Execute(w, data)
+}
+
+// callback completes the login. It does not issue the credential yet: the
+// voter must type the code that their own voting client shows. Otherwise
+// somebody could start a registration, send the login link to a voter and
+// receive that voter's credential.
 func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 	api.Handle(func(w http.ResponseWriter, r *http.Request) (any, error) {
 		provider, ok := s.Providers[r.PathValue("provider")]
@@ -431,13 +498,56 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return nil, api.Errorf(http.StatusForbidden, "%v", err)
 		}
-		ref, err := s.issue(r.Context(), r.URL.Query().Get("state"), subject)
+		session := r.URL.Query().Get("state")
+		if _, _, err := s.session(r.Context(), s.DB, session); err != nil {
+			return nil, err
+		}
+		msg, err := canon.Marshal(confirmToken{
+			Context: confirmContext, Session: session, Provider: subject.Provider, Subject: subject.StableID,
+			Expires: time.Now().Add(ConfirmValidity).Unix(),
+		})
 		if err != nil {
 			return nil, err
 		}
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = fmt.Fprintf(w, "Your voting credential is issued. Return to your voting client.\n\n"+
-			"Your entry in the public electoral roll is %x.\n", ref)
+		page(w, map[string]string{"Token": hex.EncodeToString(msg) + "." + hex.EncodeToString(s.mac(msg))})
+		return nil, nil
+	})(w, r)
+}
+
+// confirm checks the code and issues the credential.
+func (s *Server) confirm(w http.ResponseWriter, r *http.Request) {
+	api.Handle(func(w http.ResponseWriter, r *http.Request) (any, error) {
+		rawMsg, rawMAC, _ := strings.Cut(r.PostFormValue("token"), ".")
+		msg, err1 := hex.DecodeString(rawMsg)
+		mac, err2 := hex.DecodeString(rawMAC)
+		var token confirmToken
+		if err1 != nil || err2 != nil || len(s.Secret) == 0 || !hmac.Equal(mac, s.mac(msg)) ||
+			canon.Unmarshal(msg, &token) != nil || token.Context != confirmContext {
+			return nil, api.Errorf(http.StatusForbidden, "invalid confirmation")
+		}
+		if time.Now().Unix() > token.Expires {
+			return nil, api.Errorf(http.StatusForbidden, "the confirmation has expired; log in again")
+		}
+		// Count the attempt first, so that codes cannot be guessed.
+		var code string
+		err := s.DB.QueryRowContext(r.Context(),
+			`UPDATE reg_sessions SET attempts = attempts + 1 WHERE id = $1 AND attempts < $2 AND expires > now() RETURNING code`,
+			token.Session, MaxConfirmAttempts).Scan(&code)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, api.Errorf(http.StatusForbidden, "too many wrong codes, or the session has expired; start again in your voting client")
+		}
+		if err != nil {
+			return nil, err
+		}
+		typed := strings.Join(strings.Fields(r.PostFormValue("code")), "")
+		if subtle.ConstantTimeCompare([]byte(typed), []byte(code)) != 1 {
+			return nil, api.Errorf(http.StatusForbidden, "wrong confirmation code; go back and enter the code that your voting client shows")
+		}
+		ref, err := s.issue(r.Context(), token.Session, identity.Subject{Provider: token.Provider, StableID: token.Subject})
+		if err != nil {
+			return nil, err
+		}
+		page(w, map[string]string{"Ref": hex.EncodeToString(ref)})
 		return nil, nil
 	})(w, r)
 }

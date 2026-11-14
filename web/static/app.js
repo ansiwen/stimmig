@@ -17,6 +17,7 @@ const T = {
     registerText: 'You log in at the registrar once. It signs your credential without seeing it, so your ballot stays anonymous. A lost credential cannot be issued again: keep this browser, or make a backup below.',
     begin: 'Get voting credential',
     loginLink: 'Log in at the registrar (opens a new tab)',
+    loginCode: 'After the login, the registrar asks for this confirmation code:',
     loginWait: 'Keep this page open. It continues when you have logged in.',
     waiting: 'Waiting for your login…',
     haveCredential: 'You have your voting credential. Your entry in the public roll is {0}.',
@@ -69,6 +70,7 @@ const T = {
     registerText: 'Sie melden sich einmal bei der Registrierstelle an. Sie signiert Ihre Berechtigung, ohne sie zu sehen; so bleibt Ihr Stimmzettel anonym. Eine verlorene Berechtigung wird nicht neu ausgestellt: Behalten Sie diesen Browser, oder legen Sie unten eine Sicherung an.',
     begin: 'Wahlberechtigung holen',
     loginLink: 'Bei der Registrierstelle anmelden (öffnet einen neuen Tab)',
+    loginCode: 'Nach der Anmeldung fragt die Registrierstelle nach diesem Bestätigungscode:',
     loginWait: 'Lassen Sie diese Seite geöffnet. Sie geht weiter, sobald Sie angemeldet sind.',
     waiting: 'Warten auf Ihre Anmeldung…',
     haveCredential: 'Sie haben Ihre Wahlberechtigung. Ihr Eintrag im öffentlichen Wählerverzeichnis ist {0}.',
@@ -240,6 +242,7 @@ async function register() {
     state = begun.state;
     save(); // before the login: the credential is issued once and needs this state
     $('login-link').href = begun.login_url;
+    $('login-code').textContent = begun.code;
     $('login').hidden = false;
     setStatus('waiting');
     state = (await call('stimmigComplete')).state;

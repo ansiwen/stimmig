@@ -28,5 +28,7 @@ CREATE TABLE IF NOT EXISTS reg_sessions (
     election bytea NOT NULL REFERENCES reg_elections,
     blinded  bytea NOT NULL,
     ref      bytea, -- set when the voter has logged in
+    code     text NOT NULL, -- the voter types it after the login
+    attempts int  NOT NULL DEFAULT 0,
     expires  timestamptz NOT NULL
 );

@@ -56,6 +56,9 @@ type Pending struct {
 	Blinded       []byte `json:"blinded"`
 	Session       string `json:"session"`
 	LoginURL      string `json:"login_url"`
+	// Code is the confirmation code that the voter types at the registrar
+	// after the login.
+	Code string `json:"code"`
 }
 
 // PollInterval is the pause between two requests for the credential while
@@ -119,8 +122,8 @@ func (st *State) request(ctx context.Context) (*credential.Request, error) {
 
 // Begin starts the registration: it creates the credential key, sends the
 // blinded credential to the registrar and returns the URL where the voter
-// logs in. The caller must store the state before it shows that URL, and
-// then call Complete.
+// logs in. The caller must store the state before it shows that URL and
+// the confirmation code of st.Pending.Code, and then call Complete.
 //
 // If the state holds a pending registration, Begin continues it with a new
 // session for the same credential. That is safe to repeat: the registrar
@@ -149,7 +152,7 @@ func Begin(ctx context.Context, st *State) (loginURL string, err error) {
 	if err := (&api.Client{Base: st.RegistrarURL}).Do(ctx, "POST", api.ElectionPath(st.id())+"/sessions", api.SessionRequest{Blinded: req.Blinded}, &session); err != nil {
 		return "", err
 	}
-	st.Pending.Session, st.Pending.LoginURL = session.Session, session.URL
+	st.Pending.Session, st.Pending.LoginURL, st.Pending.Code = session.Session, session.URL, session.Code
 	return session.URL, nil
 }
 

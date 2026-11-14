@@ -18,6 +18,7 @@ import (
 	"github.com/ansiwen/stimmig/client"
 	"github.com/ansiwen/stimmig/identity"
 	"github.com/ansiwen/stimmig/internal/testdb"
+	"github.com/ansiwen/stimmig/internal/testkit"
 	"github.com/ansiwen/stimmig/keystore"
 	"github.com/ansiwen/stimmig/logsvc"
 	"github.com/ansiwen/stimmig/registrar"
@@ -90,7 +91,7 @@ func TestElectionFromCommandLine(t *testing.T) {
 	regMux := http.NewServeMux()
 	regSrv := httptest.NewServer(regMux)
 	defer regSrv.Close()
-	reg := &registrar.Server{DB: db, Log: &api.Client{Base: logSrv.URL, Token: "lr"}, AdminToken: "ra", Keys: keys}
+	reg := &registrar.Server{DB: db, Log: &api.Client{Base: logSrv.URL, Token: "lr"}, AdminToken: "ra", Keys: keys, Secret: []byte("confirm secret")}
 	reg.Providers = map[string]identity.Provider{"email": &identity.Email{
 		BaseURL: regSrv.URL, Secret: []byte("secret"), Mailer: mails,
 		Allow: func(ctx context.Context, state, address string) bool {
@@ -126,6 +127,18 @@ func TestElectionFromCommandLine(t *testing.T) {
 	}
 	voters := write("voters.txt", "ada@example.org\nBob@example.org\n\ncleo@example.org\n")
 
+	// login opens the mailed link and types the confirmation code, which
+	// the client has stored in its state file before it mailed the link.
+	login := func(link, statePath string) {
+		var st client.State
+		if err := readJSON(statePath, &st); err != nil {
+			t.Fatal(err)
+		}
+		if status, err := testkit.Login(link, st.Pending.Code); err != nil || status != http.StatusOK {
+			t.Fatalf("login: %d, %v", status, err)
+		}
+	}
+
 	// register obtains a credential for an address: the client waits while
 	// the voter opens the mailed link.
 	register := func(id, address string) string {
@@ -135,11 +148,7 @@ func TestElectionFromCommandLine(t *testing.T) {
 			done <- stimmig(t, 0, "client", "register", "-state", state, "-election", id,
 				"-log", logSrv.URL, "-registrar", regSrv.URL, "-ballotbox", boxSrv.URL, "-email", address)
 		}()
-		resp, err := http.Get(mails.take(t, address)) //nolint:noctx // test
-		if err != nil {
-			t.Fatal(err)
-		}
-		_ = resp.Body.Close()
+		login(mails.take(t, address), state)
 		if out := <-done; !strings.Contains(out, "Credential received") {
 			t.Fatalf("register: %s", out)
 		}
@@ -211,11 +220,7 @@ func TestElectionFromCommandLine(t *testing.T) {
 	cleoState := filepath.Join(dir, id[:8]+"cleo@example.org.json")
 	stimmig(t, 1, "client", "register", "-state", cleoState, "-election", id, "-timeout", "300ms",
 		"-log", logSrv.URL, "-registrar", regSrv.URL, "-ballotbox", boxSrv.URL, "-email", "cleo@example.org")
-	resp, err := http.Get(mails.take(t, "cleo@example.org")) //nolint:noctx // test
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = resp.Body.Close()
+	login(mails.take(t, "cleo@example.org"), cleoState)
 	cleo := register(id, "cleo@example.org")
 	if cleo != cleoState {
 		t.Fatal("test uses two state files")

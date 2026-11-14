@@ -57,11 +57,13 @@ type SessionRequest struct {
 	Provider string `cbor:"provider,omitempty"`
 }
 
-// Session is the response to a SessionRequest. The voter logs in at URL;
-// afterwards the client fetches the credential with the session.
+// Session is the response to a SessionRequest. The voter logs in at URL
+// and then types Code at the registrar; afterwards the client fetches the
+// credential with the session.
 type Session struct {
 	Session string `cbor:"session"`
 	URL     string `cbor:"url"`
+	Code    string `cbor:"code"`
 }
 
 // Credential is the response of GET /v1/sessions/{session} once the voter

@@ -57,6 +57,7 @@ func async(fn func(ctx context.Context, st *client.State, args []js.Value) (any,
 type withState struct {
 	State    *client.State `json:"state"`
 	LoginURL string        `json:"login_url,omitempty"`
+	Code     string        `json:"code,omitempty"`
 }
 
 // info describes the election for the page.
@@ -83,7 +84,10 @@ func main() {
 	}))
 	g.Set("stimmigBegin", async(func(ctx context.Context, st *client.State, _ []js.Value) (any, error) {
 		loginURL, err := client.Begin(ctx, st)
-		return withState{st, loginURL}, err
+		if err != nil {
+			return nil, err
+		}
+		return withState{st, loginURL, st.Pending.Code}, nil
 	}))
 	g.Set("stimmigComplete", async(func(ctx context.Context, st *client.State, _ []js.Value) (any, error) {
 		return withState{State: st}, client.Complete(ctx, st)

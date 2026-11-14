@@ -37,7 +37,7 @@ ballotbox:
   STIMMIG_CLIENT_DIR       directory with the voting client's bundle (make web); optional
 registrar:
   STIMMIG_PUBLIC_URL       URL under which voters reach the registrar
-  STIMMIG_EMAIL_SECRET     secret that keys the login links, 32 characters or more
+  STIMMIG_EMAIL_SECRET     secret that keys the login links and confirmations, 32 characters or more
   STIMMIG_SMTP_ADDR        host:port of the SMTP server; without it mails are printed
   STIMMIG_SMTP_FROM        sender address of the mails`
 
@@ -100,7 +100,7 @@ func serve(ctx context.Context, role string, stderr io.Writer) error {
 			mailer = identity.SMTPMailer{Addr: addr, From: e.get("STIMMIG_SMTP_FROM")}
 		}
 		handler = func(db *sql.DB) (http.Handler, error) {
-			s := &registrar.Server{DB: db, Log: log, AdminToken: adminToken, Keys: keys}
+			s := &registrar.Server{DB: db, Log: log, AdminToken: adminToken, Keys: keys, Secret: []byte(secret)}
 			s.Providers = map[string]identity.Provider{"email": &identity.Email{
 				BaseURL: publicURL,
 				Secret:  []byte(secret),

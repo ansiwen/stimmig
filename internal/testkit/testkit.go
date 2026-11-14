@@ -6,6 +6,10 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
+	"io"
+	"net/http"
+	"net/url"
+	"regexp"
 	"sync"
 
 	"github.com/ansiwen/stimmig/ballot"
@@ -62,4 +66,31 @@ func Manifest(logKey []byte, k Keys) publog.Manifest {
 		ElectionKey: k.ElectionPublic,
 		ReceiptKey:  k.Receipt.Public().(ed25519.PublicKey), //nolint:forcetypeassert // an Ed25519 key
 	}
+}
+
+var tokenPattern = regexp.MustCompile(`name="token" value="([^"]+)"`)
+
+// Login opens a login link of the registrar and types the confirmation
+// code, as a voter does. It returns the status of the last response.
+func Login(link, code string) (int, error) {
+	resp, err := http.Get(link) //nolint:gosec,noctx // test helper
+	if err != nil {
+		return 0, err
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	m := tokenPattern.FindSubmatch(body)
+	if resp.StatusCode != http.StatusOK || m == nil {
+		return resp.StatusCode, nil
+	}
+	u, err := url.Parse(link)
+	if err != nil {
+		return 0, err
+	}
+	resp, err = http.PostForm(u.Scheme+"://"+u.Host+"/v1/confirm", url.Values{"token": {string(m[1])}, "code": {code}}) //nolint:noctx // test helper
+	if err != nil {
+		return 0, err
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode, nil
 }

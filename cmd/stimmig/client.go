@@ -79,6 +79,7 @@ func runClient(args []string, stdout, stderr io.Writer) int {
 				}
 				_, _ = fmt.Fprintf(stdout, "A login link is on its way to %s. Open it to continue.\n", *email)
 			}
+			_, _ = fmt.Fprintf(stdout, "After the login, enter this confirmation code: %s\n", st.Pending.Code)
 			if err := client.Complete(ctx, &st); err != nil {
 				return err
 			}
