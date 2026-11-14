@@ -15,7 +15,8 @@ The project follows the milestones of SPEC.md section 13.
 | M3: Cryptography | Done |
 | M4: Services | Done; see the open points in SPEC.md section 14 |
 | M5: Web client | Voting client done; the admin interface is the command line |
-| M6 to M8 | Not started |
+| M6: Deployment | Image, Helm chart and encrypted key store done; no PKCS#11 HSM |
+| M7 to M8 | Not started |
 
 ## Tally
 
@@ -141,6 +142,19 @@ go run ./cmd/stimmig verify election.cbor
 ```
 
 The service interfaces are in [SPEC.md](SPEC.md) section 10.
+
+## Deployment
+
+```bash
+docker build -t stimmig .
+helm install stimmig deploy/helm/stimmig -f my-values.yaml
+```
+
+The image runs every role: the role is the command, for example
+`docker run stimmig log`. The chart expects one Kubernetes Secret per role
+with its database URL and tokens; `deploy/helm/stimmig/values.yaml` lists the
+keys. Set `STIMMIG_KEY_ENCRYPTION_KEY` (64 hexadecimal characters) so that the
+services encrypt their private keys in the database.
 
 ## Voting in the browser
 
