@@ -101,7 +101,7 @@ The voter's browser generates a credential key pair, the registrar blind-signs t
 ### 5.1 Credential issuance
 
 1. The voter opens the voting client, a static page on the ballot-box origin. The client generates a credential key pair for this election and keeps it in local storage.
-2. The client computes the blinded form of `H(election_id, credential_public_key)` and redirects the voter to the registrar with the blinded value.
+2. The client computes the blinded form of the credential message (section 5.6) and sends it to the registrar, which answers with a login link and a confirmation code. The client shows both to the voter; the link opens in a new tab.
 3. The voter authenticates through an identity plugin. The registrar maps the login to a roll reference and checks that no credential has been issued for it.
 4. The registrar asks the voter for the confirmation code that the voting client shows. If it is right, the registrar signs the blinded value with the election's issuing key and logs an `issuance` entry with the roll reference. The client fetches the blind signature.
 5. The client unblinds and verifies the signature, then stores the credential: private key, public key and registrar signature.
