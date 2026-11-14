@@ -24,7 +24,8 @@ import (
 const adminHelp = `usage: stimmig admin <command> [flags]
 commands:
   create -definition FILE        create an election; prints its ID
-  roll -election ID -voters FILE publish the roll (one email address per line), open registration
+  roll -election ID -voters FILE publish the roll, open registration; the file has one voter per line:
+                                 an email address, or oidc:<issuer>#<sub> for OpenID Connect
   close-registration -election ID
   open-voting -election ID
   close-voting -election ID      close the voting and publish the ballots
@@ -50,7 +51,7 @@ func runAdmin(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	electionFlag := fs.String("election", "", "election ID")
 	definitionPath := fs.String("definition", "", "JSON file with title, receipt_mode and tally")
-	votersPath := fs.String("voters", "", "file with one email address per line")
+	votersPath := fs.String("voters", "", "file with one voter per line")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
@@ -182,9 +183,12 @@ func readVoters(path string) (api.Roll, error) {
 	defer func() { _ = f.Close() }()
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
-		// The email provider reports addresses in lower case.
-		if address := strings.ToLower(strings.TrimSpace(sc.Text())); address != "" {
-			roll.Voters = append(roll.Voters, api.Voter{Provider: "email", Subject: address})
+		line := strings.TrimSpace(sc.Text())
+		if subject, ok := strings.CutPrefix(line, "oidc:"); ok {
+			roll.Voters = append(roll.Voters, api.Voter{Provider: "oidc", Subject: subject})
+		} else if line != "" {
+			// The email provider reports addresses in lower case.
+			roll.Voters = append(roll.Voters, api.Voter{Provider: "email", Subject: strings.ToLower(line)})
 		}
 	}
 	return roll, sc.Err()

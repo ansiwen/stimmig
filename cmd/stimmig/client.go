@@ -18,7 +18,7 @@ import (
 
 const clientHelp = `usage: stimmig client <command> -state FILE [flags]
 commands:
-  register -election ID -log URL -registrar URL -ballotbox URL [-email ADDRESS]
+  register -election ID -log URL -registrar URL -ballotbox URL [-email ADDRESS] [-provider NAME]
            obtain the voting credential; waits until you have logged in
   cast -ranking "A>B=C"   cast the ballot; ">" separates ranks, "=" equal candidates
   check                   look for the ballot in the public log
@@ -37,6 +37,7 @@ func runClient(args []string, stdout, stderr io.Writer) int {
 	registrarURL := fs.String("registrar", "", "URL of the registrar")
 	ballotBoxURL := fs.String("ballotbox", "", "URL of the ballot box")
 	email := fs.String("email", "", "email address to log in with; without it the login URL is printed")
+	provider := fs.String("provider", "", `identity provider, "email" or "oidc"; needed if the registrar offers several`)
 	ranking := fs.String("ranking", "", `ranking, for example "A>B=C"`)
 	timeout := fs.Duration("timeout", 30*time.Minute, "how long register waits for the login")
 	if err := fs.Parse(args[1:]); err != nil {
@@ -56,7 +57,7 @@ func runClient(args []string, stdout, stderr io.Writer) int {
 				if err != nil {
 					return fmt.Errorf("-election: %w", err)
 				}
-				st = client.State{LogURL: *logURL, RegistrarURL: *registrarURL, BallotBoxURL: *ballotBoxURL, ElectionID: id[:]}
+				st = client.State{LogURL: *logURL, RegistrarURL: *registrarURL, BallotBoxURL: *ballotBoxURL, ElectionID: id[:], Provider: *provider}
 			} else if err != nil {
 				return err
 			}

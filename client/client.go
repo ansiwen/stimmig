@@ -33,6 +33,9 @@ type State struct {
 	RegistrarURL string `json:"registrar_url"`
 	BallotBoxURL string `json:"ballot_box_url"`
 	ElectionID   []byte `json:"election_id"`
+	// Provider names the identity provider to log in with. It may be empty
+	// if the registrar has only one.
+	Provider string `json:"provider,omitempty"`
 	// CredentialKey is the Ed25519 private key of the credential and
 	// CredentialSignature the registrar's signature on it.
 	CredentialKey       []byte `json:"credential_key,omitempty"`
@@ -149,7 +152,7 @@ func Begin(ctx context.Context, st *State) (loginURL string, err error) {
 		return "", err
 	}
 	var session api.Session
-	if err := (&api.Client{Base: st.RegistrarURL}).Do(ctx, "POST", api.ElectionPath(st.id())+"/sessions", api.SessionRequest{Blinded: req.Blinded}, &session); err != nil {
+	if err := (&api.Client{Base: st.RegistrarURL}).Do(ctx, "POST", api.ElectionPath(st.id())+"/sessions", api.SessionRequest{Blinded: req.Blinded, Provider: st.Provider}, &session); err != nil {
 		return "", err
 	}
 	st.Pending.Session, st.Pending.LoginURL, st.Pending.Code = session.Session, session.URL, session.Code

@@ -381,6 +381,7 @@ async function start() {
     log_url: params.get('log'),
     registrar_url: params.get('registrar'),
     ballot_box_url: location.origin,
+    provider: params.get('provider') || undefined,
     election_id: btoa(String.fromCharCode(...id.match(/../g).map((h) => parseInt(h, 16)))),
   };
   try {

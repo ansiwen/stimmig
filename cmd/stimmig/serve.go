@@ -39,7 +39,10 @@ registrar:
   STIMMIG_PUBLIC_URL       URL under which voters reach the registrar
   STIMMIG_EMAIL_SECRET     secret that keys the login links and confirmations, 32 characters or more
   STIMMIG_SMTP_ADDR        host:port of the SMTP server; without it mails are printed
-  STIMMIG_SMTP_FROM        sender address of the mails`
+  STIMMIG_SMTP_FROM        sender address of the mails
+  STIMMIG_OIDC_ISSUER      OpenID Connect issuer URL; adds the provider "oidc"
+  STIMMIG_OIDC_CLIENT_ID, STIMMIG_OIDC_CLIENT_SECRET  this registrar's client at the issuer;
+                           its redirect URL is <STIMMIG_PUBLIC_URL>/v1/callback/oidc`
 
 // env reads required environment variables.
 type env struct {
@@ -109,6 +112,15 @@ func serve(ctx context.Context, role string, stderr io.Writer) error {
 					return s.Eligible(ctx, state, "email", address)
 				},
 			}}
+			// OpenID Connect is on when an issuer is configured.
+			if issuer := os.Getenv("STIMMIG_OIDC_ISSUER"); issuer != "" {
+				oidc, err := identity.NewOIDC(ctx, issuer, os.Getenv("STIMMIG_OIDC_CLIENT_ID"),
+					os.Getenv("STIMMIG_OIDC_CLIENT_SECRET"), publicURL, []byte(secret))
+				if err != nil {
+					return nil, err
+				}
+				s.Providers[oidc.ID()] = oidc
+			}
 			return s.Handler(), s.Init(ctx)
 		}
 	case "ballotbox":

@@ -83,3 +83,22 @@ func TestVerifyCommandFails(t *testing.T) {
 		t.Errorf("exit %d for a missing file", code)
 	}
 }
+
+func TestReadVoters(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "voters.txt")
+	content := " Ada@Example.org \n\noidc:https://idp.example#User-42\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	roll, err := readVoters(path)
+	if err != nil || len(roll.Voters) != 2 {
+		t.Fatalf("%+v, %v", roll, err)
+	}
+	if v := roll.Voters[0]; v.Provider != "email" || v.Subject != "ada@example.org" {
+		t.Errorf("email voter: %+v", v)
+	}
+	// OpenID Connect subjects keep their case.
+	if v := roll.Voters[1]; v.Provider != "oidc" || v.Subject != "https://idp.example#User-42" {
+		t.Errorf("oidc voter: %+v", v)
+	}
+}
