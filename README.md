@@ -17,7 +17,7 @@ The project follows the milestones of SPEC.md section 13.
 | M5: Web client | Voting client done; the admin interface is the command line |
 | M6: Deployment | Image, Helm chart and encrypted key store done; no PKCS#11 HSM |
 | M7: Identity | OpenID Connect done; ATProto not built |
-| M8: Review | Not started |
+| M8: Review | Not started: no protocol model, no external review |
 
 ## Tally
 
