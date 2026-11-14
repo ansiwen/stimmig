@@ -75,8 +75,7 @@ func (s *Server) sealer() keystore.Sealer {
 
 // Init creates the tables if they are missing.
 func (s *Server) Init(ctx context.Context) error {
-	_, err := s.DB.ExecContext(ctx, schema)
-	return err
+	return api.Migrate(ctx, s.DB, schema)
 }
 
 // Handler returns the routes of the service.

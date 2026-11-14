@@ -217,3 +217,11 @@ func CORS(h http.Handler) http.Handler {
 		h.ServeHTTP(w, r)
 	})
 }
+
+// Migrate applies a schema of "CREATE ... IF NOT EXISTS" statements. A
+// database lock makes it safe when several replicas start at once;
+// without it, concurrent creation of the same table can fail.
+func Migrate(ctx context.Context, db *sql.DB, schema string) error {
+	_, err := db.ExecContext(ctx, "BEGIN; SELECT pg_advisory_xact_lock(7846446); "+schema+"; COMMIT;") //nolint:gosec // the schema is embedded in the binary
+	return err
+}

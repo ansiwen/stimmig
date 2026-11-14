@@ -197,3 +197,19 @@ func TestLogService(t *testing.T) {
 		t.Fatalf("malformed sizes: %v", err)
 	}
 }
+
+// Several replicas that start at once create the tables without failing.
+func TestConcurrentStart(t *testing.T) {
+	db := testdb.Open(t)
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := NewStore(ctx, db); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+}

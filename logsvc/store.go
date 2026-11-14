@@ -10,6 +10,7 @@ import (
 	_ "embed" // for the schema
 	"errors"
 
+	"github.com/ansiwen/stimmig/api"
 	"github.com/ansiwen/stimmig/canon"
 	"github.com/ansiwen/stimmig/keystore"
 	"github.com/ansiwen/stimmig/merkle"
@@ -40,8 +41,7 @@ func (s *Store) sealer() keystore.Sealer {
 
 // NewStore creates the tables if they are missing.
 func NewStore(ctx context.Context, db *sql.DB) (*Store, error) {
-	_, err := db.ExecContext(ctx, schema)
-	return &Store{db: db}, err
+	return &Store{db: db}, api.Migrate(ctx, db, schema)
 }
 
 // NewKey creates a log key and returns its public key. The private key
