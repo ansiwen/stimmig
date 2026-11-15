@@ -106,6 +106,13 @@ func TestLogService(t *testing.T) {
 		t.Fatalf("garbage entry: %v", err)
 	}
 
+	// The lifecycle order: after the manifest comes the roll, nothing else.
+	for _, typ := range []string{publog.TypeIssuance, publog.TypeResult, publog.TypeRegistrationClose} {
+		out := api.Append{Entries: []canon.Raw{entry(t, typ, map[string]int{})}}
+		if err := registrar.Do(ctx, "POST", path+"/entries", out, nil); !api.IsStatus(err, http.StatusConflict) {
+			t.Fatalf("%s after the manifest: %v", typ, err)
+		}
+	}
 	// An append with the expected size works once.
 	if err := registrar.Do(ctx, "POST", path+"/entries", roll, &head); err != nil || head.Size != 2 {
 		t.Fatalf("append: %+v, %v", head, err)

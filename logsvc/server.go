@@ -8,6 +8,7 @@ import (
 
 	"github.com/ansiwen/stimmig/api"
 	"github.com/ansiwen/stimmig/canon"
+	"github.com/ansiwen/stimmig/election"
 	"github.com/ansiwen/stimmig/merkle"
 	"github.com/ansiwen/stimmig/publog"
 )
@@ -166,6 +167,31 @@ func (s *Server) appendEntries(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		records[i] = publog.Record{Type: typ, Body: canon.Raw(body)}
+	}
+	// The entries follow the lifecycle of an election, so that nobody who
+	// holds a writer token can make the log unverifiable by writing an
+	// entry out of its place.
+	size, err := s.Store.Size(r.Context(), id)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	last, err := s.Store.Entries(r.Context(), id, size-1, size)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	prev, _, err := publog.DecodeEntry(last[0])
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	for _, rec := range records {
+		if !election.Follows(prev, rec.Type) {
+			http.Error(w, "a "+rec.Type+" entry must not follow a "+prev+" entry", http.StatusConflict)
+			return
+		}
+		prev = rec.Type
 	}
 	signer, err := s.Store.Signer(r.Context(), id)
 	if err != nil {

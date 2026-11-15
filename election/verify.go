@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/ansiwen/stimmig/ballot"
 	"github.com/ansiwen/stimmig/canon"
@@ -108,15 +109,15 @@ var follows = map[string][]string{
 	publog.TypeResult:            {},
 }
 
+// Follows reports whether an entry of type typ may come directly after an
+// entry of type prev in the log of an election (SPEC.md section 7).
+func Follows(prev, typ string) bool {
+	return slices.Contains(follows[prev], typ)
+}
+
 func (v *verifier) entry(log *publog.Report, index uint64, typ string, body []byte) error {
-	if index > 0 {
-		ok := false
-		for _, t := range follows[v.last] {
-			ok = ok || t == typ
-		}
-		if !ok {
-			return fmt.Errorf("must not follow a %s entry", v.last)
-		}
+	if index > 0 && !Follows(v.last, typ) {
+		return fmt.Errorf("must not follow a %s entry", v.last)
 	}
 	v.last = typ
 	id := log.ElectionID
