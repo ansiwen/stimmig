@@ -360,28 +360,22 @@ func Check(ctx context.Context, st *State) (*Checked, error) {
 	if rep.Phase == election.PhaseSetup || rep.Phase == election.PhaseRegistration || rep.Phase == election.PhaseRegistrationClosed {
 		return out, nil // the ballots are not published before the close
 	}
-	// The inclusion proof ties the ballot to the signed final tree head.
+	// The inclusion proof is computed from the verified export, not asked for
+	// at the log service: a request for one leaf would tell the operator of
+	// the log which ballot this client has.
 	final := rep.Log.Final
-	var proof api.Proof
-	path := fmt.Sprintf("%s/inclusion?leaf=%x&size=%d", api.ElectionPath(st.id()), leaf[:], final.Size)
-	err = (&api.Client{Base: st.LogURL}).Do(ctx, "GET", path, nil, &proof)
-	if api.IsStatus(err, http.StatusNotFound) {
+	index := slices.Index(rep.Log.Leaves, leaf)
+	if index < 0 {
 		if st.Receipt != nil && ballot.VerifyReceipt(rep.Log.Manifest.ReceiptKey, st.id(), leaf, st.Receipt) == nil {
 			return out, errors.New("client: the ballot is missing from the public log although the ballot box signed a receipt for it; the receipt is evidence of this")
 		}
 		return out, errors.New("client: the ballot is missing from the public log")
 	}
+	proof, err := merkle.InclusionProof(rep.Log.Leaves[:final.Size], uint64(index)) //nolint:gosec // index is not negative
 	if err != nil {
 		return out, err
 	}
-	hashes := make([]merkle.Hash, len(proof.Hashes))
-	for i, h := range proof.Hashes {
-		if len(h) != merkle.HashSize {
-			return out, errors.New("client: malformed inclusion proof")
-		}
-		hashes[i] = merkle.Hash(h)
-	}
-	if err := merkle.VerifyInclusion(leaf, proof.Index, final.Size, hashes, merkle.Hash(final.Root)); err != nil {
+	if err := merkle.VerifyInclusion(leaf, uint64(index), final.Size, proof, merkle.Hash(final.Root)); err != nil { //nolint:gosec // index is not negative
 		return out, err
 	}
 	out.Included = true
