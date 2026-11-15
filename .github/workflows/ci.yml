@@ -48,3 +48,38 @@ jobs:
       - uses: golangci/golangci-lint-action@v8
         with:
           version: v2.5.0
+
+  browser:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: stimmig
+          POSTGRES_PASSWORD: stimmig
+          POSTGRES_DB: stimmig
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install the browser
+        run: |
+          npm install --no-save playwright@1.49.1
+          npx playwright install --with-deps chromium
+      - name: Create the databases
+        run: |
+          for d in log reg box; do
+            PGPASSWORD=stimmig psql -h localhost -U stimmig -d stimmig -c "CREATE DATABASE stimmig_$d"
+          done
+      - name: Run the voting client in the browser through an election
+        env:
+          STIMMIG_DB_URL_PREFIX: postgres://stimmig:stimmig@localhost
+        run: web/check/run.sh
