@@ -24,3 +24,21 @@ func TestParseRanking(t *testing.T) {
 		}
 	}
 }
+
+func TestSameRanking(t *testing.T) {
+	a := tally.Ballot{{"A"}, {"B", "C"}}
+	for _, c := range []struct {
+		x, y tally.Ballot
+		want bool
+	}{
+		{a, tally.Ballot{{"A"}, {"B", "C"}}, true},
+		{nil, tally.Ballot{}, true},
+		{a, tally.Ballot{{"A"}}, false},
+		{a, tally.Ballot{{"A"}, {"C", "B"}}, false},
+		{a, nil, false},
+	} {
+		if got := sameRanking(c.x, c.y); got != c.want {
+			t.Errorf("sameRanking(%v, %v) = %v", c.x, c.y, got)
+		}
+	}
+}

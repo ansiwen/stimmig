@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -44,9 +45,14 @@ type State struct {
 	RollReference []byte `json:"roll_reference,omitempty"`
 	// Pending is a registration that has started and not finished.
 	Pending *Pending `json:"pending,omitempty"`
-	// Ballot is the encoded ballot that was cast, and Receipt the ballot
-	// box's receipt for it.
-	Ballot  []byte `json:"ballot,omitempty"`
+	// Ballot is the encoded ballot that was sent, and BallotRanking its
+	// ranking. They are kept only while the outcome is unknown: after an
+	// answer of the ballot box that refuses the ballot they are deleted. The
+	// ballot is cast once Receipt is set, or in receipt mode none once Ballot
+	// and CredentialKey are deleted.
+	Ballot        []byte       `json:"ballot,omitempty"`
+	BallotRanking tally.Ballot `json:"ballot_ranking,omitempty"`
+	// Receipt is the ballot box's receipt for the ballot.
 	Receipt []byte `json:"receipt,omitempty"`
 }
 
@@ -263,16 +269,27 @@ func Cast(ctx context.Context, st *State, ranking tally.Ballot) error {
 		return err
 	}
 	if st.Ballot != nil {
-		// A ballot was built before; send that one again, because the
-		// ballot box may already have it.
+		// An earlier attempt ended without an answer, so the ballot box may
+		// have the ballot. Only that ballot can be sent again.
+		if !sameRanking(st.BallotRanking, ranking) {
+			return errors.New("client: an earlier attempt to cast a different ranking may have reached the ballot box; cast that ranking again to find out")
+		}
 		if err := canon.Unmarshal(st.Ballot, &b); err != nil {
 			return err
 		}
-	} else if st.Ballot, err = canon.Marshal(b); err != nil {
-		return err
+	} else {
+		if st.Ballot, err = canon.Marshal(b); err != nil {
+			return err
+		}
+		st.BallotRanking = ranking
 	}
 	var receipt api.Receipt
 	if err := (&api.Client{Base: st.BallotBoxURL}).Do(ctx, "POST", api.ElectionPath(st.id())+"/ballots", b, &receipt); err != nil {
+		var refused *api.StatusError
+		if errors.As(err, &refused) && refused.Code >= 400 && refused.Code < 500 {
+			// The ballot box has not stored this ballot.
+			st.Ballot, st.BallotRanking = nil, nil
+		}
 		return err
 	}
 	if m.ReceiptMode == publog.ReceiptFull {
@@ -288,8 +305,21 @@ func Cast(ctx context.Context, st *State, ranking tally.Ballot) error {
 	}
 	// Receipt mode none: keep nothing that could show the vote to others
 	// (SPEC.md section 5.5).
-	st.CredentialKey, st.CredentialSignature, st.Ballot = nil, nil, nil
+	st.CredentialKey, st.CredentialSignature, st.Ballot, st.BallotRanking = nil, nil, nil, nil
 	return nil
+}
+
+// sameRanking compares two rankings, taking nil as the empty ranking.
+func sameRanking(a, b tally.Ballot) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !slices.Equal(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // Checked is the outcome of a receipt check.

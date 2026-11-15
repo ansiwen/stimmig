@@ -166,7 +166,12 @@ func TestElectionFromCommandLine(t *testing.T) {
 	stimmig(t, 1, "client", "register", "-state", ada, "-election", id, "-log", logSrv.URL, "-registrar", regSrv.URL)
 	stimmig(t, 1, "admin", "open-voting", "-election", id) // registration is still open
 	stimmig(t, 0, "admin", "close-registration", "-election", id)
-	stimmig(t, 1, "client", "cast", "-state", ada, "-ranking", "A>B") // voting is not open
+	// A refused cast is not a cast ballot: the state keeps nothing of it, and
+	// the later cast of another ranking sends that ranking.
+	stimmig(t, 1, "client", "cast", "-state", ada, "-ranking", "B>A") // voting is not open
+	if state, _ := os.ReadFile(ada); strings.Contains(string(state), `"ballot"`) || strings.Contains(string(state), "ballot_ranking") || strings.Contains(string(state), "receipt") {
+		t.Fatalf("state after a refused cast: %s", state)
+	}
 	stimmig(t, 0, "admin", "open-voting", "-election", id)
 	if out := stimmig(t, 1, "client", "cast", "-state", bob, "-ranking", "A>B>C"); !strings.Contains(out, "not a valid ballot") {
 		t.Fatalf("ballot against the rank limit: %s", out)
