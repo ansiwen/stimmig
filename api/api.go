@@ -22,13 +22,24 @@ import (
 // ContentType is the media type of all request and response bodies.
 const ContentType = "application/cbor"
 
-// MaxBody limits request and response bodies.
+// MaxBody limits the bodies of requests from the operator and from the
+// other services, and the bodies of responses.
 // shortcut: the ballots of a close go in one request, so this bounds an election to about 100000 ballots; send the close in chunks when that is not enough.
 const MaxBody = 256 << 20
 
-// Read decodes the body of a request.
+// MaxVoterBody limits the bodies of requests that anybody can send: a
+// session request, a ballot or a confirmation. The largest is a ballot of
+// about a kilobyte; the margin is for long ballots of large elections.
+const MaxVoterBody = 64 << 10
+
+// Read decodes the body of a request from the operator or another service.
 func Read(w http.ResponseWriter, r *http.Request, v any) error {
-	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxBody))
+	return ReadLimit(w, r, v, MaxBody)
+}
+
+// ReadLimit decodes the body of a request that is at most limit bytes long.
+func ReadLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) error {
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err != nil {
 		return err
 	}
@@ -218,10 +229,36 @@ func CORS(h http.Handler) http.Handler {
 	})
 }
 
-// Migrate applies a schema of "CREATE ... IF NOT EXISTS" statements. A
-// database lock makes it safe when several replicas start at once;
-// without it, concurrent creation of the same table can fail.
-func Migrate(ctx context.Context, db *sql.DB, schema string) error {
-	_, err := db.ExecContext(ctx, "BEGIN; SELECT pg_advisory_xact_lock(7846446); "+schema+"; COMMIT;") //nolint:gosec // the schema is embedded in the binary
-	return err
+// Migrate applies the steps of a service's schema that the database has not
+// seen yet, in order, and records them. Step 1 is the first schema; add a
+// later change as a new last step and never edit a step that was released.
+// Each step is a script of several statements and runs once. A database
+// lock makes it safe when several replicas start at once.
+func Migrate(ctx context.Context, db *sql.DB, name string, steps []string) error {
+	return InTx(ctx, db, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(7846446)`); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`CREATE TABLE IF NOT EXISTS schema_migrations (name text NOT NULL, version int NOT NULL, PRIMARY KEY (name, version))`); err != nil {
+			return err
+		}
+		for i, step := range steps {
+			var done bool
+			err := tx.QueryRowContext(ctx, `SELECT true FROM schema_migrations WHERE name = $1 AND version = $2`, name, i+1).Scan(&done)
+			if err == nil {
+				continue
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, step); err != nil { //nolint:gosec // the steps are embedded in the binary
+				return fmt.Errorf("api: migration %s %d: %w", name, i+1, err)
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations (name, version) VALUES ($1, $2)`, name, i+1); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }

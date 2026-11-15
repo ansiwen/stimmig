@@ -41,7 +41,7 @@ func (s *Store) sealer() keystore.Sealer {
 
 // NewStore creates the tables if they are missing.
 func NewStore(ctx context.Context, db *sql.DB) (*Store, error) {
-	return &Store{db: db}, api.Migrate(ctx, db, schema)
+	return &Store{db: db}, api.Migrate(ctx, db, "log", []string{schema})
 }
 
 // NewKey creates a log key and returns its public key. The private key

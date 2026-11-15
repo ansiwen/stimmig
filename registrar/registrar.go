@@ -84,7 +84,7 @@ func (s *Server) sealer() keystore.Sealer {
 
 // Init creates the tables if they are missing.
 func (s *Server) Init(ctx context.Context) error {
-	return api.Migrate(ctx, s.DB, schema)
+	return api.Migrate(ctx, s.DB, "registrar", []string{schema})
 }
 
 // Handler returns the routes of the service.
@@ -344,7 +344,7 @@ func (s *Server) newSession(w http.ResponseWriter, r *http.Request) (any, error)
 		return nil, err
 	}
 	var req api.SessionRequest
-	if err := api.Read(w, r, &req); err != nil {
+	if err := api.ReadLimit(w, r, &req, api.MaxVoterBody); err != nil {
 		return nil, api.Errorf(http.StatusBadRequest, "%v", err)
 	}
 	if req.Provider == "" && len(s.Providers) == 1 {
@@ -517,6 +517,7 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 // confirm checks the code and issues the credential.
 func (s *Server) confirm(w http.ResponseWriter, r *http.Request) {
 	api.Handle(func(w http.ResponseWriter, r *http.Request) (any, error) {
+		r.Body = http.MaxBytesReader(w, r.Body, api.MaxVoterBody)
 		rawMsg, rawMAC, _ := strings.Cut(r.PostFormValue("token"), ".")
 		msg, err1 := hex.DecodeString(rawMsg)
 		mac, err2 := hex.DecodeString(rawMAC)

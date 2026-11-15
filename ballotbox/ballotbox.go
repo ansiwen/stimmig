@@ -77,7 +77,7 @@ func (s *Server) sealer() keystore.Sealer {
 
 // Init creates the tables if they are missing.
 func (s *Server) Init(ctx context.Context) error {
-	return api.Migrate(ctx, s.DB, schema)
+	return api.Migrate(ctx, s.DB, "ballotbox", []string{schema})
 }
 
 // Handler returns the routes of the service.
@@ -284,7 +284,7 @@ func (s *Server) cast(w http.ResponseWriter, r *http.Request) (any, error) {
 		return nil, err
 	}
 	var b election.Ballot
-	if err := api.Read(w, r, &b); err != nil {
+	if err := api.ReadLimit(w, r, &b, api.MaxVoterBody); err != nil {
 		return nil, api.Errorf(http.StatusBadRequest, "%v", err)
 	}
 	raw, err := canon.Marshal(b)

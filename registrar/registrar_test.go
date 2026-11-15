@@ -257,6 +257,10 @@ func TestRegistration(t *testing.T) {
 	if err := e.voter.Do(ctx, "POST", e.electPath+"/sessions", short, nil); !api.IsStatus(err, http.StatusBadRequest) {
 		t.Fatalf("short blinded value: %v", err)
 	}
+	oversized := api.SessionRequest{Blinded: make([]byte, api.MaxVoterBody)}
+	if err := e.voter.Do(ctx, "POST", e.electPath+"/sessions", oversized, nil); !api.IsStatus(err, http.StatusBadRequest) {
+		t.Fatalf("oversized session request: %v", err)
+	}
 	unknown := api.ElectionPath(merkle.Hash{1})
 	if err := e.voter.Do(ctx, "POST", unknown+"/sessions", short, nil); !api.IsStatus(err, http.StatusNotFound) {
 		t.Fatalf("unknown election: %v", err)

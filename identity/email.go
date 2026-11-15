@@ -115,6 +115,7 @@ var emailForm = template.Must(template.New("form").Parse(`<!doctype html>
 
 // ServeHTTP shows the address form and mails the login link.
 func (e *Email) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	state := r.FormValue("state")
 	if state == "" {
 		http.Error(w, "state is missing", http.StatusBadRequest)

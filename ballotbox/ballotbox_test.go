@@ -171,6 +171,12 @@ func TestBallotBox(t *testing.T) {
 	if err := voter.Do(ctx, "POST", api.ElectionPath(merkle.Hash{1})+"/ballots", b0, nil); !api.IsStatus(err, http.StatusNotFound) {
 		t.Fatalf("unknown election: %v", err)
 	}
+	// Anybody can post to the ballot box: a large body is refused.
+	huge := tampered
+	huge.Ciphertext = make([]byte, api.MaxVoterBody)
+	if err := voter.Do(ctx, "POST", path+"/ballots", huge, nil); !api.IsStatus(err, http.StatusBadRequest) {
+		t.Fatalf("oversized ballot: %v", err)
+	}
 	var st api.Status
 	if err := voter.Do(ctx, "GET", path, nil, &st); err != nil || st.Phase != PhaseOpen || st.Cast != 1 {
 		t.Fatalf("status %+v, %v", st, err)
