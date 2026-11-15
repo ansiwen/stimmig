@@ -160,12 +160,18 @@ services encrypt their private keys in the database.
 ## Voting in the browser
 
 `make web` builds the voting client into `web/dist`. Start the ballot box
-with `STIMMIG_CLIENT_DIR=web/dist`, and give voters a link that names the
-election, the log and the registrar:
+with `STIMMIG_CLIENT_DIR=web/dist`, `STIMMIG_PUBLIC_LOG_URL` and
+`STIMMIG_PUBLIC_REGISTRAR_URL`, and give voters a link that names the election:
 
 ```
-http://127.0.0.1:8083/?election=<ID>&log=http://127.0.0.1:8081&registrar=http://127.0.0.1:8082
+http://127.0.0.1:8083/?election=<ID>
 ```
+
+The page takes nothing but the election ID from the link. The log and the
+registrar come from the ballot box that served the page; see SPEC.md section 14.
+
+`web/check/run.sh` runs the page in a headless browser through a complete
+election (needs Node.js with playwright and a Chromium).
 
 The page runs the same client code as `stimmig client`, compiled to
 WebAssembly.

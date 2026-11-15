@@ -33,7 +33,11 @@ roles:
     enabled: true
     existingSecret: stimmig-ballotbox
     host: ""
-    env: {}
+    env:
+      # Public URLs that the voting client uses; both are required, because
+      # the image serves the client.
+      STIMMIG_PUBLIC_LOG_URL: ""
+      STIMMIG_PUBLIC_REGISTRAR_URL: ""
 
 # URL of the log service for registrar and ballot box. Empty means the log
 # of this release.

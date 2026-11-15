@@ -298,8 +298,13 @@ func TestClientBundle(t *testing.T) {
 		t.Fatal("the hash is not stable")
 	}
 
-	srv := httptest.NewServer((&Server{ClientDir: dir}).Handler())
+	srv := httptest.NewServer((&Server{ClientDir: dir, LogURL: "https://log.example", RegistrarURL: "https://registrar.example"}).Handler())
 	defer srv.Close()
+	var config api.ClientConfig
+	if err := (&api.Client{Base: srv.URL}).Do(ctx, "GET", "/v1/config", nil, &config); err != nil ||
+		config.LogURL != "https://log.example" || config.RegistrarURL != "https://registrar.example" {
+		t.Fatalf("config %+v, %v", config, err)
+	}
 	var bundle api.ClientBundle
 	if err := (&api.Client{Base: srv.URL}).Do(ctx, "GET", "/v1/client", nil, &bundle); err != nil || !bytes.Equal(bundle.Hash, h1) {
 		t.Fatalf("served hash %x, %v", bundle.Hash, err)

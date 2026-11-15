@@ -35,6 +35,7 @@ registrar and ballotbox:
   STIMMIG_LOG_TOKEN        this service's token at the log service
 ballotbox:
   STIMMIG_CLIENT_DIR       directory with the voting client's bundle (make web); optional
+  STIMMIG_PUBLIC_LOG_URL, STIMMIG_PUBLIC_REGISTRAR_URL  public URLs the voting client uses; required with the bundle
 registrar:
   STIMMIG_PUBLIC_URL       URL under which voters reach the registrar
   STIMMIG_EMAIL_SECRET     secret that keys the login links and confirmations, 32 characters or more
@@ -127,6 +128,9 @@ func serve(ctx context.Context, role string, stderr io.Writer) error {
 		log := &api.Client{Base: e.get("STIMMIG_LOG_URL"), Token: e.get("STIMMIG_LOG_TOKEN")}
 		handler = func(db *sql.DB) (http.Handler, error) {
 			s := &ballotbox.Server{DB: db, Log: log, AdminToken: adminToken, ClientDir: os.Getenv("STIMMIG_CLIENT_DIR"), Keys: keys}
+			if s.ClientDir != "" {
+				s.LogURL, s.RegistrarURL = e.get("STIMMIG_PUBLIC_LOG_URL"), e.get("STIMMIG_PUBLIC_REGISTRAR_URL")
+			}
 			return s.Handler(), s.Init(ctx)
 		}
 	}

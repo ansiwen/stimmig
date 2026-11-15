@@ -97,3 +97,11 @@ type Status struct {
 type ClientBundle struct {
 	Hash []byte `cbor:"hash"`
 }
+
+// ClientConfig is the response of GET /v1/config of the ballot box: where
+// the voting client it serves finds the log and the registrar. The client
+// takes nothing but the election ID from the link it was opened with.
+type ClientConfig struct {
+	LogURL       string `cbor:"log_url"`
+	RegistrarURL string `cbor:"registrar_url"`
+}

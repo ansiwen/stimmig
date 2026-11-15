@@ -6,7 +6,9 @@
 const T = {
   en: {
     loading: 'Loading and verifying the election…',
-    missing: 'This link is incomplete. It must name the election, the log and the registrar.',
+    missing: 'This link is incomplete. It must name the election.',
+    noConfig: 'This voting site is not configured.',
+    unknownElection: 'This voting site does not know this election.',
     phase: 'Phase: {0}. Eligible: {1}, credentials issued: {2}, ballots published: {3}.',
     trustTitle: 'What this election protects and what it does not',
     trust1: 'Your ballot cannot be linked to you as long as the registrar and the ballot box do not work together.',
@@ -59,7 +61,9 @@ const T = {
   },
   de: {
     loading: 'Die Wahl wird geladen und geprüft…',
-    missing: 'Dieser Link ist unvollständig. Er muss die Wahl, das Log und die Registrierstelle nennen.',
+    missing: 'Dieser Link ist unvollständig. Er muss die Wahl nennen.',
+    noConfig: 'Diese Wahlseite ist nicht eingerichtet.',
+    unknownElection: 'Diese Wahlseite kennt diese Wahl nicht.',
     phase: 'Phase: {0}. Wahlberechtigt: {1}, ausgegebene Berechtigungen: {2}, veröffentlichte Stimmzettel: {3}.',
     trustTitle: 'Was diese Wahl schützt und was nicht',
     trust1: 'Ihr Stimmzettel lässt sich nicht mit Ihnen verknüpfen, solange Registrierstelle und Urne nicht zusammenarbeiten.',
@@ -115,6 +119,21 @@ const T = {
 const $ = (id) => document.getElementById(id);
 let lang = (navigator.language || 'en').startsWith('de') ? 'de' : 'en';
 const t = (key, ...args) => args.reduce((s, a, i) => s.replace('{' + i + '}', a), T[lang][key]);
+
+// decodeConfig reads the ballot box's answer, a CBOR map of two text
+// strings, without a CBOR library: it only needs the two values.
+function decodeConfig(bytes) {
+  const out = {};
+  let i = 1; // after the map header 0xa2
+  const read = () => {
+    let len = bytes[i] & 0x1f; i++;
+    if (len === 24) { len = bytes[i]; i++; } else if (len === 25) { len = (bytes[i] << 8) | bytes[i + 1]; i += 2; }
+    const s = new TextDecoder().decode(bytes.slice(i, i + len)); i += len;
+    return s;
+  };
+  for (let n = 0; n < 2; n++) { const k = read(); out[k] = read(); }
+  return out;
+}
 
 const params = new URLSearchParams(location.search);
 const storageKey = 'stimmig:' + params.get('election');
@@ -222,7 +241,7 @@ function render() {
   $('info').hidden = false;
   $('phase').textContent = t('phase', info.phase, info.eligible, info.issued, info.cast);
   const hasCredential = Boolean(state.credential_signature);
-  const hasBallot = Boolean(state.ballot);
+  const hasBallot = Boolean(state.receipt); // a ballot that is only sent, not answered, is not cast yet
   const doneNone = state.cast_without_receipt;
   $('register').hidden = hasCredential || doneNone;
   $('vote').hidden = !hasCredential || hasBallot || !$('confirm').hidden;
@@ -280,7 +299,7 @@ async function cast() {
   $('cast').disabled = true;
   try {
     const out = await call('stimmigCast', JSON.stringify(groups()));
-    const none = !out.error && !out.state.ballot;
+    const none = !out.error && !out.state.ballot && !out.state.receipt;
     state = out.state;
     if (none) state.cast_without_receipt = true;
     save();
@@ -373,13 +392,25 @@ async function start() {
   $('import-file').addEventListener('change', (e) => e.target.files[0] && importBackup(e.target.files[0]));
   render();
   const id = params.get('election') || '';
-  if (!/^[0-9a-f]{64}$/.test(id) || !params.get('log') || !params.get('registrar')) {
+  if (!/^[0-9a-f]{64}$/.test(id)) {
     setStatus('');
     return showError(t('missing'));
   }
+  // Nothing but the election ID is taken from the link: a link that named
+  // another registrar could give the voter's credential to its owner. The
+  // log and the registrar come from the ballot box that served this page.
+  let config;
+  try {
+    const answer = await fetch(location.origin + '/v1/config');
+    config = answer.ok ? await answer.arrayBuffer() : null;
+  } catch { config = null; }
+  if (!config) { setStatus(''); return showError(t('noConfig')); }
+  const known = await fetch(location.origin + '/v1/elections/' + id);
+  if (!known.ok) { setStatus(''); return showError(t('unknownElection')); }
+  const urls = decodeConfig(new Uint8Array(config));
   state = JSON.parse(localStorage.getItem(storageKey)) || {
-    log_url: params.get('log'),
-    registrar_url: params.get('registrar'),
+    log_url: urls.log_url,
+    registrar_url: urls.registrar_url,
     ballot_box_url: location.origin,
     provider: params.get('provider') || undefined,
     election_id: btoa(String.fromCharCode(...id.match(/../g).map((h) => parseInt(h, 16)))),

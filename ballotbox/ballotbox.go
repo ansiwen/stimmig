@@ -59,6 +59,9 @@ type Server struct {
 	// If it is set, the ballot box serves the bundle at / and its hash at
 	// GET /v1/client.
 	ClientDir string
+	// LogURL and RegistrarURL are the public URLs that the voting client
+	// uses; GET /v1/config serves them. They are required with ClientDir.
+	LogURL, RegistrarURL string
 	// Keys encrypts the private receipt keys at rest. Nil stores them in
 	// clear.
 	Keys keystore.Sealer
@@ -90,6 +93,9 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET /v1/client", api.Handle(func(http.ResponseWriter, *http.Request) (any, error) {
 			hash, err := ClientHash(s.ClientDir)
 			return api.ClientBundle{Hash: hash}, err
+		}))
+		mux.HandleFunc("GET /v1/config", api.Handle(func(http.ResponseWriter, *http.Request) (any, error) {
+			return api.ClientConfig{LogURL: s.LogURL, RegistrarURL: s.RegistrarURL}, nil
 		}))
 		files := http.FileServer(http.Dir(s.ClientDir))
 		mux.Handle("GET /", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
