@@ -144,7 +144,7 @@ const assert = (cond, msg) => { if (!cond) throw new Error('FAILED: ' + msg); co
   assert(true, 'the backup restores credential, ballot and receipt');
 
   await page.click('#check');
-  await page.waitForFunction(() => document.querySelector('#check-result').textContent.length > 0, null, { timeout: 30000 });
+  await page.waitForSelector('#check-result p', { timeout: 30000 }); // not waitForFunction: the page's content security policy forbids the eval it needs
   assert((await page.textContent('#check-result')).includes('published at the close'), 'before the close the ballot is not public');
 
   admin('close-voting', '-election', id);
@@ -152,7 +152,7 @@ const assert = (cond, msg) => { if (!cond) throw new Error('FAILED: ' + msg); co
   await page.reload();
   await page.waitForSelector('#done:not([hidden])', { timeout: 60000 });
   await page.click('#check');
-  await page.waitForFunction(() => document.querySelector('#check-result').textContent.includes('decrypted'), null, { timeout: 30000 });
+  await page.waitForSelector('#check-result p:has-text("decrypted")', { timeout: 30000 });
   const result = await page.textContent('#check-result');
   assert(result.includes('Bob > Ada') && result.includes('Winners: Bob'), 'after the tally the page shows the decrypted ballot and the result');
   await page.screenshot({ path: dir + '/done.png', fullPage: true });
