@@ -34,8 +34,10 @@ type Created struct {
 
 // RegistrarKeys is the response of POST /v1/keys of the registrar.
 type RegistrarKeys struct {
-	IssuingKey  []byte `cbor:"issuing_key"`
-	ElectionKey []byte `cbor:"election_key"`
+	IssuingKey []byte `cbor:"issuing_key"`
+	// IssuingKeyProof is credential.ProveIssuingKey of the issuing key.
+	IssuingKeyProof [][]byte `cbor:"issuing_key_proof"`
+	ElectionKey     []byte   `cbor:"election_key"`
 }
 
 // Voter is one eligible voter: an identity provider and the subject ID

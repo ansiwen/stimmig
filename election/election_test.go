@@ -60,6 +60,10 @@ func testManifest(t *testing.T) publog.Manifest {
 	if err != nil {
 		t.Fatal(err)
 	}
+	proof, err := credential.ProveIssuingKey(k.issuing)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return publog.Manifest{
 		Version: publog.ManifestVersion,
 		Title:   "Board election",
@@ -69,12 +73,13 @@ func testManifest(t *testing.T) publog.Manifest {
 			Method:     tally.Schulze,
 			MaxRanks:   2,
 		},
-		Algorithms:  publog.DefaultAlgorithms(publog.ReceiptFull),
-		ReceiptMode: publog.ReceiptFull,
-		LogKey:      k.log.Public().(ed25519.PublicKey),
-		IssuingKey:  issuing,
-		ElectionKey: k.electionPublic,
-		ReceiptKey:  k.receipt.Public().(ed25519.PublicKey),
+		Algorithms:      publog.DefaultAlgorithms(publog.ReceiptFull),
+		ReceiptMode:     publog.ReceiptFull,
+		LogKey:          k.log.Public().(ed25519.PublicKey),
+		IssuingKey:      issuing,
+		IssuingKeyProof: proof,
+		ElectionKey:     k.electionPublic,
+		ReceiptKey:      k.receipt.Public().(ed25519.PublicKey),
 	}
 }
 

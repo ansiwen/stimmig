@@ -84,7 +84,7 @@ func setup(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	e.manifest = testkit.Manifest(logKey.LogKey, testkit.SharedKeys())
-	e.manifest.IssuingKey, e.manifest.ElectionKey = keys.IssuingKey, keys.ElectionKey
+	e.manifest.IssuingKey, e.manifest.IssuingKeyProof, e.manifest.ElectionKey = keys.IssuingKey, keys.IssuingKeyProof, keys.ElectionKey
 	if err := (&api.Client{Base: logSrv.URL, Token: "la"}).Do(ctx, "POST", "/v1/elections", e.manifest, nil); err != nil {
 		t.Fatal(err)
 	}

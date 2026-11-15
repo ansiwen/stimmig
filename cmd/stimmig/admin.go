@@ -146,7 +146,7 @@ func adminCreate(ctx context.Context, log, reg, box *api.Client, definitionPath 
 	if err := reg.Do(ctx, "POST", "/v1/keys", nil, &regKeys); err != nil {
 		return merkle.Hash{}, fmt.Errorf("registrar: %w", err)
 	}
-	m.LogKey, m.IssuingKey, m.ElectionKey = logKey.LogKey, regKeys.IssuingKey, regKeys.ElectionKey
+	m.LogKey, m.IssuingKey, m.IssuingKeyProof, m.ElectionKey = logKey.LogKey, regKeys.IssuingKey, regKeys.IssuingKeyProof, regKeys.ElectionKey
 	if def.ReceiptMode == publog.ReceiptFull {
 		var boxKey api.BallotBoxKey
 		if err := box.Do(ctx, "POST", "/v1/keys", nil, &boxKey); err != nil {

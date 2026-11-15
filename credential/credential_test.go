@@ -211,3 +211,67 @@ func TestRequestFromSeed(t *testing.T) {
 		t.Fatal("short seed accepted")
 	}
 }
+
+func TestIssuingKeyProof(t *testing.T) {
+	sk := issuingKey()
+	proof, err := ProveIssuingKey(sk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyIssuingKeyProof(&sk.PublicKey, proof); err != nil {
+		t.Fatal(err)
+	}
+	bad := map[string][][]byte{
+		"missing value": proof[:3],
+		"extra value":   append(append([][]byte{}, proof...), proof[0]),
+		"swapped":       {proof[1], proof[0], proof[2], proof[3]},
+		"short value":   {proof[0][1:], proof[1], proof[2], proof[3]},
+		"zero value":    {make([]byte, len(proof[0])), proof[1], proof[2], proof[3]},
+		"value one":     {append(make([]byte, len(proof[0])-1), 1), proof[1], proof[2], proof[3]},
+	}
+	for name, p := range bad {
+		if VerifyIssuingKeyProof(&sk.PublicKey, p) == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	// The proof belongs to its key.
+	other, _ := GenerateIssuingKey(rand.Reader)
+	if VerifyIssuingKeyProof(&other.PublicKey, proof) == nil {
+		t.Error("proof of another key accepted")
+	}
+}
+
+// A modulus with a prime p where e divides p-1 has e-th roots for one value
+// in e only, so it cannot give the proof. The key here is small and made
+// for the test; it is not an RSA key that ParseIssuingKey would accept.
+func TestIssuingKeyProofFailsWhenEDividesTheOrder(t *testing.T) {
+	e := int64(65537)
+	// p = k*e + 1 and q, both prime, with p-1 divisible by e.
+	var p *big.Int
+	for k := int64(2); ; k += 2 {
+		c := big.NewInt(k*e + 1)
+		if c.ProbablyPrime(20) {
+			p = c
+			break
+		}
+	}
+	q, _ := rand.Prime(rand.Reader, 160)
+	n := new(big.Int).Mul(p, q)
+	pub := &rsa.PublicKey{N: n, E: int(e)}
+	// The registrar knows p and q. It can take e-th roots only of the
+	// values that are e-th powers modulo p.
+	rootable := 0
+	for i := 0; i < 2000; i++ {
+		y := new(big.Int).Add(proofChallenge(pub, 0), big.NewInt(int64(i)))
+		y.Mod(y, n)
+		// y is an e-th power modulo p iff y^((p-1)/e) = 1 mod p.
+		exp := new(big.Int).Div(new(big.Int).Sub(p, big.NewInt(1)), big.NewInt(e))
+		if new(big.Int).Exp(new(big.Int).Mod(y, p), exp, p).Cmp(big.NewInt(1)) == 0 {
+			rootable++
+		}
+	}
+	// About 2000/65537 values are rootable: practically none.
+	if rootable > 5 {
+		t.Fatalf("%d of 2000 values have roots", rootable)
+	}
+}

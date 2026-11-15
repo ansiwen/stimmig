@@ -22,6 +22,7 @@ import (
 type Keys struct {
 	Issuing         *rsa.PrivateKey
 	IssuingPublic   []byte
+	IssuingProof    [][]byte
 	ElectionPublic  []byte
 	ElectionPrivate []byte
 	Receipt         ed25519.PrivateKey
@@ -36,6 +37,9 @@ var SharedKeys = sync.OnceValue(func() Keys {
 		panic(err)
 	}
 	if k.IssuingPublic, err = credential.MarshalIssuingKey(&k.Issuing.PublicKey); err != nil {
+		panic(err)
+	}
+	if k.IssuingProof, err = credential.ProveIssuingKey(k.Issuing); err != nil {
 		panic(err)
 	}
 	if k.ElectionPublic, k.ElectionPrivate, err = ballot.GenerateElectionKey(); err != nil {
@@ -59,12 +63,13 @@ func Manifest(logKey []byte, k Keys) publog.Manifest {
 			Method:     tally.Schulze,
 			MaxRanks:   2,
 		},
-		Algorithms:  publog.DefaultAlgorithms(publog.ReceiptFull),
-		ReceiptMode: publog.ReceiptFull,
-		LogKey:      logKey,
-		IssuingKey:  k.IssuingPublic,
-		ElectionKey: k.ElectionPublic,
-		ReceiptKey:  k.Receipt.Public().(ed25519.PublicKey), //nolint:forcetypeassert // an Ed25519 key
+		Algorithms:      publog.DefaultAlgorithms(publog.ReceiptFull),
+		ReceiptMode:     publog.ReceiptFull,
+		LogKey:          logKey,
+		IssuingKey:      k.IssuingPublic,
+		IssuingKeyProof: k.IssuingProof,
+		ElectionKey:     k.ElectionPublic,
+		ReceiptKey:      k.Receipt.Public().(ed25519.PublicKey), //nolint:forcetypeassert // an Ed25519 key
 	}
 }
 

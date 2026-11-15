@@ -18,6 +18,7 @@ import (
 	"crypto/cipher"
 	"crypto/ed25519"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -188,6 +189,62 @@ func Verify(issuingKey *rsa.PublicKey, electionID merkle.Hash, credentialKey ed2
 	}
 	if err := verifier.Verify(msg, signature); err != nil {
 		return errors.New("credential: registrar signature is invalid")
+	}
+	return nil
+}
+
+// ProofRoots is the number of values in an issuing key proof.
+const ProofRoots = 4
+
+// proofChallenge derives the i-th value of an issuing key proof from the
+// public key alone, by SHA-256 in counter mode, so that the registrar
+// cannot choose it. 16 bytes more than the modulus make the reduction
+// bias negligible.
+func proofChallenge(pub *rsa.PublicKey, i int) *big.Int {
+	size := (pub.N.BitLen()+7)/8 + 16
+	var stream []byte
+	for counter := 0; len(stream) < size; counter++ {
+		h := sha256.New()
+		h.Write([]byte("stimmig-issuing-key-proof-v1"))
+		h.Write([]byte{byte(i), byte(counter >> 8), byte(counter)})
+		h.Write(pub.N.Bytes())
+		stream = h.Sum(stream)
+	}
+	return new(big.Int).Mod(new(big.Int).SetBytes(stream[:size]), pub.N)
+}
+
+// ProveIssuingKey returns the proof that the public exponent of the key is
+// coprime to the order of the group: the e-th roots of ProofRoots values
+// that nobody chose. If e divided the order, only one value in e would have
+// an e-th root, and the registrar could not answer. RFC 9474 blindness
+// depends on this, and a client cannot see it from the key.
+func ProveIssuingKey(priv *rsa.PrivateKey) ([][]byte, error) {
+	size := (priv.N.BitLen() + 7) / 8
+	proof := make([][]byte, ProofRoots)
+	for i := range proof {
+		y := proofChallenge(&priv.PublicKey, i)
+		root := new(big.Int).Exp(y, priv.D, priv.N)
+		if new(big.Int).Exp(root, big.NewInt(int64(priv.E)), priv.N).Cmp(y) != 0 {
+			return nil, errors.New("credential: the key has no e-th root of a challenge")
+		}
+		proof[i] = root.FillBytes(make([]byte, size))
+	}
+	return proof, nil
+}
+
+// VerifyIssuingKeyProof checks the proof of ProveIssuingKey.
+func VerifyIssuingKeyProof(pub *rsa.PublicKey, proof [][]byte) error {
+	if len(proof) != ProofRoots {
+		return fmt.Errorf("credential: the issuing key proof must have %d values", ProofRoots)
+	}
+	size := (pub.N.BitLen() + 7) / 8
+	e := big.NewInt(int64(pub.E))
+	for i, b := range proof {
+		root := new(big.Int).SetBytes(b)
+		if len(b) != size || root.Sign() == 0 || root.Cmp(pub.N) >= 0 ||
+			new(big.Int).Exp(root, e, pub.N).Cmp(proofChallenge(pub, i)) != 0 {
+			return errors.New("credential: the issuing key proof is invalid")
+		}
 	}
 	return nil
 }

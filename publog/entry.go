@@ -75,6 +75,9 @@ type Manifest struct {
 	// IssuingKey is the registrar's RSA public key for credentials, as a
 	// DER SubjectPublicKeyInfo.
 	IssuingKey []byte `cbor:"issuing_key"`
+	// IssuingKeyProof is the proof of credential.ProveIssuingKey: the
+	// registrar's key can be trusted to blind.
+	IssuingKeyProof [][]byte `cbor:"issuing_key_proof"`
 	// ElectionKey is the public key that ballots are encrypted to, as an
 	// uncompressed P-256 point.
 	ElectionKey []byte `cbor:"election_key"`
@@ -131,7 +134,11 @@ func (m Manifest) Validate() error {
 	if len(m.LogKey) != ed25519.PublicKeySize {
 		return errors.New("publog: log key has the wrong size")
 	}
-	if _, err := credential.ParseIssuingKey(m.IssuingKey); err != nil {
+	issuingKey, err := credential.ParseIssuingKey(m.IssuingKey)
+	if err != nil {
+		return err
+	}
+	if err := credential.VerifyIssuingKeyProof(issuingKey, m.IssuingKeyProof); err != nil {
 		return err
 	}
 	if err := ballot.CheckElectionKey(m.ElectionKey); err != nil {

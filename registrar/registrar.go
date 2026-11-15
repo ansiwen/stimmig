@@ -131,6 +131,10 @@ func (s *Server) newKeys(_ http.ResponseWriter, r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	proof, err := credential.ProveIssuingKey(issuing)
+	if err != nil {
+		return nil, err
+	}
 	electionPublic, electionPrivate, err := ballot.GenerateElectionKey()
 	if err != nil {
 		return nil, err
@@ -146,7 +150,7 @@ func (s *Server) newKeys(_ http.ResponseWriter, r *http.Request) (any, error) {
 	_, err = s.DB.ExecContext(r.Context(),
 		`INSERT INTO reg_keys (issuing_public, issuing_private, election_public, election_private) VALUES ($1, $2, $3, $4)`,
 		issuingPublic, issuingSealed, electionPublic, electionSealed)
-	return api.RegistrarKeys{IssuingKey: issuingPublic, ElectionKey: electionPublic}, err
+	return api.RegistrarKeys{IssuingKey: issuingPublic, IssuingKeyProof: proof, ElectionKey: electionPublic}, err
 }
 
 func (s *Server) create(w http.ResponseWriter, r *http.Request) (any, error) {

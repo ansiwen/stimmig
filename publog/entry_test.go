@@ -21,12 +21,18 @@ func testKey() ed25519.PrivateKey {
 }
 
 // testKeys creates the slow keys once per test run.
-var testKeys = sync.OnceValue(func() (k struct{ issuing, election, electionPrivate []byte }) {
+var testKeys = sync.OnceValue(func() (k struct {
+	issuing, election, electionPrivate []byte
+	proof                              [][]byte
+}) {
 	sk, err := credential.GenerateIssuingKey(rand.Reader)
 	if err != nil {
 		panic(err)
 	}
 	if k.issuing, err = credential.MarshalIssuingKey(&sk.PublicKey); err != nil {
+		panic(err)
+	}
+	if k.proof, err = credential.ProveIssuingKey(sk); err != nil {
 		panic(err)
 	}
 	if k.election, k.electionPrivate, err = ballot.GenerateElectionKey(); err != nil {
@@ -45,12 +51,13 @@ func testManifest() Manifest {
 			Method:     tally.Schulze,
 			MaxRanks:   2,
 		},
-		Algorithms:  DefaultAlgorithms(ReceiptFull),
-		ReceiptMode: ReceiptFull,
-		LogKey:      testKey().Public().(ed25519.PublicKey),
-		IssuingKey:  testKeys().issuing,
-		ElectionKey: testKeys().election,
-		ReceiptKey:  testKey().Public().(ed25519.PublicKey),
+		Algorithms:      DefaultAlgorithms(ReceiptFull),
+		ReceiptMode:     ReceiptFull,
+		LogKey:          testKey().Public().(ed25519.PublicKey),
+		IssuingKey:      testKeys().issuing,
+		IssuingKeyProof: testKeys().proof,
+		ElectionKey:     testKeys().election,
+		ReceiptKey:      testKey().Public().(ed25519.PublicKey),
 	}
 }
 
@@ -59,22 +66,27 @@ func TestManifestValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	bad := map[string]func(*Manifest){
-		"version":      func(m *Manifest) { m.Version = 2 },
-		"nonce":        func(m *Manifest) { m.Nonce = m.Nonce[:15] },
-		"log hash":     func(m *Manifest) { m.Algorithms.LogHash = "sha1" },
-		"tree head":    func(m *Manifest) { m.Algorithms.TreeHead = "ed25519-v2" },
-		"log key":      func(m *Manifest) { m.LogKey = m.LogKey[:31] },
-		"tally":        func(m *Manifest) { m.Tally.Method = "plurality" },
-		"no tally":     func(m *Manifest) { m.Tally = tally.Manifest{} },
-		"no algorithm": func(m *Manifest) { m.Algorithms = Algorithms{} },
-		"credential":   func(m *Manifest) { m.Algorithms.Credential = "blind-schnorr-v1" },
-		"encryption":   func(m *Manifest) { m.Algorithms.BallotEncryption = "none" },
-		"signature":    func(m *Manifest) { m.Algorithms.BallotSignature = "ml-dsa-v1" },
-		"receipt mode": func(m *Manifest) { m.ReceiptMode = "maybe" },
-		"receipt alg":  func(m *Manifest) { m.Algorithms.ReceiptSignature = "" },
-		"receipt key":  func(m *Manifest) { m.ReceiptKey = nil },
-		"client hash":  func(m *Manifest) { m.ClientHash = []byte{1, 2, 3} },
-		"issuing key":  func(m *Manifest) { m.IssuingKey = m.IssuingKey[1:] },
+		"version":           func(m *Manifest) { m.Version = 2 },
+		"nonce":             func(m *Manifest) { m.Nonce = m.Nonce[:15] },
+		"log hash":          func(m *Manifest) { m.Algorithms.LogHash = "sha1" },
+		"tree head":         func(m *Manifest) { m.Algorithms.TreeHead = "ed25519-v2" },
+		"log key":           func(m *Manifest) { m.LogKey = m.LogKey[:31] },
+		"tally":             func(m *Manifest) { m.Tally.Method = "plurality" },
+		"no tally":          func(m *Manifest) { m.Tally = tally.Manifest{} },
+		"no algorithm":      func(m *Manifest) { m.Algorithms = Algorithms{} },
+		"credential":        func(m *Manifest) { m.Algorithms.Credential = "blind-schnorr-v1" },
+		"encryption":        func(m *Manifest) { m.Algorithms.BallotEncryption = "none" },
+		"signature":         func(m *Manifest) { m.Algorithms.BallotSignature = "ml-dsa-v1" },
+		"receipt mode":      func(m *Manifest) { m.ReceiptMode = "maybe" },
+		"receipt alg":       func(m *Manifest) { m.Algorithms.ReceiptSignature = "" },
+		"receipt key":       func(m *Manifest) { m.ReceiptKey = nil },
+		"client hash":       func(m *Manifest) { m.ClientHash = []byte{1, 2, 3} },
+		"issuing key":       func(m *Manifest) { m.IssuingKey = m.IssuingKey[1:] },
+		"issuing key proof": func(m *Manifest) { m.IssuingKeyProof = nil },
+		"proof of another key": func(m *Manifest) {
+			other, _ := credential.GenerateIssuingKey(rand.Reader)
+			m.IssuingKeyProof, _ = credential.ProveIssuingKey(other)
+		},
 		"election key": func(m *Manifest) { m.ElectionKey = m.ElectionKey[:64] },
 		"none with receipt key": func(m *Manifest) {
 			m.ReceiptMode = ReceiptNone
