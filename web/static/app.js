@@ -260,6 +260,7 @@ async function register() {
     const begun = await call('stimmigBegin');
     state = begun.state;
     save(); // before the login: the credential is issued once and needs this state
+    if (!/^https?:\/\//.test(begun.login_url)) throw new Error('The login link is not a web link.');
     $('login-link').href = begun.login_url;
     $('login-code').textContent = begun.code;
     $('login').hidden = false;
@@ -372,6 +373,11 @@ async function importBackup(file) {
     const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: buf.slice(16, 28) }, key, buf.slice(28));
     const loaded = JSON.parse(new TextDecoder().decode(plain));
     if (loaded.election_id !== state.election_id) throw new Error();
+    // Only the secrets come from the file. A crafted file must not point the
+    // page at other servers.
+    loaded.log_url = state.log_url;
+    loaded.registrar_url = state.registrar_url;
+    loaded.ballot_box_url = state.ballot_box_url;
     state = loaded;
     save();
     setStatus('imported');
