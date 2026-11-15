@@ -102,3 +102,14 @@ func TestReadVoters(t *testing.T) {
 		t.Errorf("oidc voter: %+v", v)
 	}
 }
+
+func TestServiceTokensMustDiffer(t *testing.T) {
+	t.Setenv("STIMMIG_DATABASE_URL", "postgres://unused")
+	t.Setenv("STIMMIG_ADMIN_TOKEN", "same")
+	t.Setenv("STIMMIG_REGISTRAR_TOKEN", "same")
+	t.Setenv("STIMMIG_BALLOTBOX_TOKEN", "other")
+	var out, errOut bytes.Buffer
+	if code := run([]string{"log"}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "must be different") {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+}

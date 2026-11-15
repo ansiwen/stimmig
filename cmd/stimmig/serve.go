@@ -84,6 +84,10 @@ func serve(ctx context.Context, role string, stderr io.Writer) error {
 	switch role {
 	case "log":
 		regToken, boxToken := e.get("STIMMIG_REGISTRAR_TOKEN"), e.get("STIMMIG_BALLOTBOX_TOKEN")
+		// Each token gives its holder different rights, so they must differ.
+		if regToken == boxToken || regToken == adminToken || boxToken == adminToken {
+			return errors.New("the admin, registrar and ballot box tokens must be different")
+		}
 		handler = func(db *sql.DB) (http.Handler, error) {
 			store, err := logsvc.NewStore(ctx, db)
 			if err != nil {
@@ -100,6 +104,9 @@ func serve(ctx context.Context, role string, stderr io.Writer) error {
 			return errors.New("STIMMIG_EMAIL_SECRET is shorter than 32 characters")
 		}
 		var mailer identity.Mailer = identity.LogMailer{W: stderr}
+		if os.Getenv("STIMMIG_SMTP_ADDR") == "" {
+			_, _ = fmt.Fprintln(stderr, "stimmig registrar: warning: STIMMIG_SMTP_ADDR is not set; login mails, with the voters' addresses, are printed here")
+		}
 		if addr := os.Getenv("STIMMIG_SMTP_ADDR"); addr != "" {
 			mailer = identity.SMTPMailer{Addr: addr, From: e.get("STIMMIG_SMTP_FROM")}
 		}
@@ -148,7 +155,12 @@ func serve(ctx context.Context, role string, stderr io.Writer) error {
 	}
 	// No access log: the ballot box must not record client addresses, and
 	// the other services do not need to.
-	srv := &http.Server{Addr: listen, Handler: h, ReadHeaderTimeout: 10 * time.Second}
+	// The write timeout is long because a tally or an export can take a while.
+	srv := &http.Server{
+		Addr: listen, Handler: h,
+		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
+		WriteTimeout: 5 * time.Minute, IdleTimeout: 2 * time.Minute,
+	}
 	_, _ = fmt.Fprintf(stderr, "stimmig %s: listening on %s\n", role, listen)
 	return srv.ListenAndServe()
 }
