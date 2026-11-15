@@ -41,19 +41,29 @@ const exportPage = 1000
 // Export writes the complete log. It fails if entries were appended after
 // the last tree head; call Head first.
 func (l *Log) Export(ctx context.Context, w io.Writer) error {
-	heads, err := l.Heads(ctx)
-	if err != nil {
-		return err
-	}
-	if len(heads) == 0 {
-		return errors.New("publog: the log has no tree head")
-	}
-	// The export is a snapshot up to the last tree head.
-	total := heads[len(heads)-1].Size
-	if size, err := l.Size(ctx); err != nil {
-		return err
-	} else if size != total {
-		return errors.New("publog: the last tree head does not cover all entries")
+	// The tree heads and the size are read one after the other. If an append
+	// lands between the two reads, they disagree and are read again.
+	var heads []TreeHead
+	var total uint64
+	for attempt := 0; ; attempt++ {
+		var err error
+		if heads, err = l.Heads(ctx); err != nil {
+			return err
+		}
+		if len(heads) == 0 {
+			return errors.New("publog: the log has no tree head")
+		}
+		total = heads[len(heads)-1].Size
+		size, err := l.Size(ctx)
+		if err != nil {
+			return err
+		}
+		if size == total {
+			break
+		}
+		if size < total || attempt >= 4 {
+			return errors.New("publog: the last tree head does not cover all entries")
+		}
 	}
 	write := func(v any) error {
 		data, err := canon.Marshal(v)
