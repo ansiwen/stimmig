@@ -41,6 +41,7 @@ registrar:
   STIMMIG_EMAIL_SECRET     secret that keys the login links and confirmations, 32 characters or more
   STIMMIG_SMTP_ADDR        host:port of the SMTP server; without it mails are printed
   STIMMIG_SMTP_FROM        sender address of the mails
+  STIMMIG_MAIL_INTERVAL    shortest time between two login mails to one address, default 1m
   STIMMIG_OIDC_ISSUER      OpenID Connect issuer URL; adds the provider "oidc"
   STIMMIG_OIDC_CLIENT_ID, STIMMIG_OIDC_CLIENT_SECRET  this registrar's client at the issuer;
                            its redirect URL is <STIMMIG_PUBLIC_URL>/v1/callback/oidc`
@@ -112,6 +113,11 @@ func serve(ctx context.Context, role string, stderr io.Writer) error {
 		}
 		handler = func(db *sql.DB) (http.Handler, error) {
 			s := &registrar.Server{DB: db, Log: log, AdminToken: adminToken, Keys: keys, Secret: []byte(secret)}
+			if v := os.Getenv("STIMMIG_MAIL_INTERVAL"); v != "" {
+				if s.MailInterval, err = time.ParseDuration(v); err != nil {
+					return nil, err
+				}
+			}
 			s.Providers = map[string]identity.Provider{"email": &identity.Email{
 				BaseURL: publicURL,
 				Secret:  []byte(secret),
