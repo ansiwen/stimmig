@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -29,6 +30,7 @@ var linkPattern = regexp.MustCompile(`http://\S+`)
 
 type env struct {
 	t         *testing.T
+	db        *sql.DB
 	admin     *api.Client // registrar, admin token
 	voter     *api.Client // registrar, no token
 	log       *api.Client // log service, no token
@@ -49,7 +51,7 @@ func setup(t *testing.T) *env {
 	logSrv := httptest.NewServer((&logsvc.Server{Store: store, AdminToken: "la", RegistrarToken: "lr"}).Handler())
 	t.Cleanup(logSrv.Close)
 
-	e := &env{t: t, mails: &bytes.Buffer{}, log: &api.Client{Base: logSrv.URL}}
+	e := &env{t: t, db: db, mails: &bytes.Buffer{}, log: &api.Client{Base: logSrv.URL}}
 	mux := http.NewServeMux()
 	regSrv := httptest.NewServer(mux)
 	t.Cleanup(regSrv.Close)
@@ -343,5 +345,55 @@ func TestConfirmationCode(t *testing.T) {
 	}
 	if code := open(t, e.login(again, "ada@example.org"), strings.ReplaceAll(again.Code, " ", "")); code != http.StatusOK {
 		t.Fatalf("new session: %d", code)
+	}
+}
+
+// If the registrar's transaction is lost after the log accepted the entry,
+// the next attempt finds the identical entry in the log and goes on. If
+// something else is in that place, it refuses.
+func TestLostCommit(t *testing.T) {
+	e := setup(t)
+	roll := api.Roll{Voters: []api.Voter{{Provider: "email", Subject: "ada@example.org"}}}
+	if err := e.admin.Do(ctx, "PUT", e.electPath+"/roll", roll, nil); err != nil {
+		t.Fatal(err)
+	}
+	register := func() int {
+		_, _, session, err := e.begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return open(t, e.login(session, "ada@example.org"), session.Code)
+	}
+	if code := register(); code != http.StatusOK {
+		t.Fatalf("registration: %d", code)
+	}
+	exec := func(query string) {
+		if _, err := e.db.ExecContext(ctx, query); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The log has the issuance, the registrar forgot it.
+	exec(`UPDATE reg_roll SET seq = NULL, blinded = NULL, blind_sig = NULL`)
+	exec(`UPDATE reg_elections SET issued = 0, log_size = log_size - 1`)
+	if code := register(); code != http.StatusOK {
+		t.Fatalf("registration after the lost commit: %d", code)
+	}
+	if rep := e.report(); rep.Issued != 1 || rep.Log.Entries != 3 {
+		t.Fatalf("issued %d, %d entries: the issuance was logged twice or lost", rep.Issued, rep.Log.Entries)
+	}
+	if err := e.admin.Do(ctx, "POST", e.electPath+"/close", nil, nil); err != nil {
+		t.Fatalf("close after the lost commit: %v", err)
+	}
+	if rep := e.report(); rep.Phase != election.PhaseRegistrationClosed || rep.Issued != 1 {
+		t.Fatalf("after the close: %+v", rep)
+	}
+
+	// A registrar whose stored size is further behind is refused: the log
+	// holds other entries there.
+	exec(`UPDATE reg_elections SET phase = 'open', log_size = log_size - 2`)
+	exec(`UPDATE reg_roll SET seq = NULL, blinded = NULL, blind_sig = NULL`)
+	exec(`UPDATE reg_elections SET issued = 0`)
+	if err := e.admin.Do(ctx, "POST", e.electPath+"/close", nil, nil); err == nil {
+		t.Fatal("close accepted although the log holds other entries there")
 	}
 }

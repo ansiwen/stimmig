@@ -236,7 +236,8 @@ func (s *Server) close(_ http.ResponseWriter, r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	ctx := r.Context()
+	ctx, cancel := api.Detach(r)
+	defer cancel()
 	if err := s.setPhase(ctx, id, PhaseClosed, PhaseOpen, PhaseClosed); err != nil {
 		return nil, err
 	}

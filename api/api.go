@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/ansiwen/stimmig/canon"
 	"github.com/ansiwen/stimmig/merkle"
@@ -94,6 +95,17 @@ func IsStatus(err error, code int) bool {
 	return errors.As(err, &se) && se.Code == code
 }
 
+// defaultHTTP has a timeout, so that a stuck service cannot hold a database
+// lock of the caller forever.
+var defaultHTTP = &http.Client{Timeout: 2 * time.Minute}
+
+// Detach returns a context for work that must finish once it has started,
+// whether or not the client that asked for it stays connected: a request
+// that wrote to the log and then lost its client must still commit.
+func Detach(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Minute)
+}
+
 // Client calls one service.
 type Client struct {
 	// Base is the URL of the service without a trailing slash.
@@ -140,7 +152,7 @@ func (c *Client) Raw(ctx context.Context, method, path string, in any) ([]byte, 
 	}
 	hc := c.HTTP
 	if hc == nil {
-		hc = http.DefaultClient
+		hc = defaultHTTP
 	}
 	resp, err := hc.Do(req)
 	if err != nil {

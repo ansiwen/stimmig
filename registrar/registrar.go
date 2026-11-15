@@ -220,10 +220,20 @@ func lock(ctx context.Context, tx *sql.Tx, id merkle.Hash) (state, error) {
 
 // logAppend appends records to the public log and stores the new state.
 //
-// shortcut: if the log append succeeds and this transaction then fails to commit, the stored log size is behind the log and every later append is refused with a conflict until an operator repairs the row; nothing wrong is ever logged. Reconcile with the log automatically when this happens in practice.
+// If the log append succeeds and this transaction then fails to commit, the
+// stored log size is behind the log. The records of the registrar are
+// deterministic (the same roll, the same sequence number), so the next
+// attempt finds them already in the log, at the place where it would
+// append them, and goes on. Anything else in that place is a conflict.
 func (s *Server) logAppend(ctx context.Context, tx *sql.Tx, st state, records ...publog.Record) error {
 	if _, err := api.AppendRecords(ctx, s.Log, st.id, st.logSize, records); err != nil {
-		return fmt.Errorf("log: %w", err)
+		if !api.IsStatus(err, http.StatusConflict) {
+			return fmt.Errorf("log: %w", err)
+		}
+		done, checkErr := s.alreadyLogged(ctx, st.id, st.logSize, records)
+		if checkErr != nil || !done {
+			return fmt.Errorf("log: %w", err)
+		}
 	}
 	_, err := tx.ExecContext(ctx, `UPDATE reg_elections SET phase = $2, issued = $3, log_size = $4 WHERE id = $1`,
 		st.id[:], st.phase, int64(st.issued), int64(st.logSize)+int64(len(records))) //nolint:gosec // counts fit in int64
@@ -239,7 +249,8 @@ func (s *Server) roll(w http.ResponseWriter, r *http.Request) (any, error) {
 	if err := api.Read(w, r, &roll); err != nil {
 		return nil, api.Errorf(http.StatusBadRequest, "%v", err)
 	}
-	ctx := r.Context()
+	ctx, cancel := api.Detach(r)
+	defer cancel()
 	return nil, api.InTx(ctx, s.DB, func(tx *sql.Tx) error {
 		st, err := lock(ctx, tx, id)
 		if err != nil {
@@ -277,7 +288,8 @@ func (s *Server) close(_ http.ResponseWriter, r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	ctx := r.Context()
+	ctx, cancel := api.Detach(r)
+	defer cancel()
 	return nil, api.InTx(ctx, s.DB, func(tx *sql.Tx) error {
 		st, err := lock(ctx, tx, id)
 		if err != nil {
@@ -300,7 +312,8 @@ func (s *Server) tally(_ http.ResponseWriter, r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	ctx := r.Context()
+	ctx, cancel := api.Detach(r)
+	defer cancel()
 	export, err := api.Export(ctx, s.Log, id)
 	if err != nil {
 		return nil, fmt.Errorf("log: %w", err)
@@ -544,7 +557,9 @@ func (s *Server) confirm(w http.ResponseWriter, r *http.Request) {
 		if subtle.ConstantTimeCompare([]byte(typed), []byte(code)) != 1 {
 			return nil, api.Errorf(http.StatusForbidden, "wrong confirmation code; go back and enter the code that your voting client shows")
 		}
-		ref, err := s.issue(r.Context(), token.Session, identity.Subject{Provider: token.Provider, StableID: token.Subject})
+		ctx, cancel := api.Detach(r)
+		defer cancel()
+		ref, err := s.issue(ctx, token.Session, identity.Subject{Provider: token.Provider, StableID: token.Subject})
 		if err != nil {
 			return nil, err
 		}
@@ -630,4 +645,35 @@ func (s *Server) credential(_ http.ResponseWriter, r *http.Request) (any, error)
 		return nil, api.Errorf(http.StatusNotFound, "no credential yet: the login is not complete, or the session is unknown")
 	}
 	return c, err
+}
+
+// alreadyLogged reports whether the verified public log holds exactly the
+// records at the entries from from on, and nothing after them.
+func (s *Server) alreadyLogged(ctx context.Context, id merkle.Hash, from uint64, records []publog.Record) (bool, error) {
+	export, err := api.Export(ctx, s.Log, id)
+	if err != nil {
+		return false, err
+	}
+	var got [][]byte
+	rep, err := publog.Verify(bytes.NewReader(export), func(_ *publog.Report, index uint64, typ string, body []byte) error {
+		if index < from {
+			return nil
+		}
+		entry, err := publog.EncodeEntry(typ, canon.Raw(body))
+		got = append(got, entry)
+		return err
+	})
+	if err != nil {
+		return false, err
+	}
+	if rep.ElectionID != id || len(got) != len(records) {
+		return false, nil
+	}
+	for i, r := range records {
+		want, err := publog.EncodeEntry(r.Type, r.Body)
+		if err != nil || !bytes.Equal(want, got[i]) {
+			return false, err
+		}
+	}
+	return true, nil
 }
