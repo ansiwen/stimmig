@@ -183,7 +183,7 @@ func (s *Server) logReport(ctx context.Context, id merkle.Hash) (*election.Repor
 	if err != nil {
 		return nil, fmt.Errorf("log: %w", err)
 	}
-	rep, err := election.Verify(bytes.NewReader(export), nil)
+	rep, err := election.VerifyFor(bytes.NewReader(export), id)
 	if err != nil {
 		return nil, fmt.Errorf("the log does not verify: %w", err)
 	}

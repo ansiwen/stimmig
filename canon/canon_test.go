@@ -163,3 +163,43 @@ func TestLargeArray(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestFieldNamesAreCaseSensitive(t *testing.T) {
+	type s struct {
+		Name string `cbor:"name"`
+	}
+	for _, key := range []string{"Name", "NAME"} {
+		data, _ := Marshal(map[string]string{key: "x"})
+		var out s
+		if err := Unmarshal(data, &out); err == nil {
+			t.Errorf("key %q decoded into %+v", key, out)
+		}
+	}
+	data, _ := Marshal(map[string]string{"name": "x"})
+	var out s
+	if err := Unmarshal(data, &out); err != nil || out.Name != "x" {
+		t.Fatalf("%+v, %v", out, err)
+	}
+}
+
+func TestUnmarshalStrict(t *testing.T) {
+	type s struct {
+		A []byte `cbor:"a"`
+		B string `cbor:"b,omitempty"`
+	}
+	good, _ := Marshal(s{A: []byte{1}})
+	var out s
+	if err := UnmarshalStrict(good, &out); err != nil {
+		t.Fatal(err)
+	}
+	// A field is missing, so the struct would encode with it.
+	missing, _ := Marshal(map[string]string{"b": "x"})
+	if err := UnmarshalStrict(missing, &out); err == nil {
+		t.Error("item with a missing field accepted")
+	}
+	// A field is present with its zero value, which the struct omits.
+	extra, _ := Marshal(map[string]any{"a": []byte{1}, "b": ""})
+	if err := UnmarshalStrict(extra, &out); err == nil {
+		t.Error("item with an explicit zero value accepted")
+	}
+}

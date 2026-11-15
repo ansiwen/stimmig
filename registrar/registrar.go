@@ -318,7 +318,7 @@ func (s *Server) tally(_ http.ResponseWriter, r *http.Request) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("log: %w", err)
 	}
-	rep, err := election.Verify(bytes.NewReader(export), nil)
+	rep, err := election.VerifyFor(bytes.NewReader(export), id)
 	if err != nil {
 		return nil, fmt.Errorf("the log does not verify: %w", err)
 	}

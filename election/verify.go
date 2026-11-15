@@ -130,7 +130,7 @@ func (v *verifier) entry(log *publog.Report, index uint64, typ string, body []by
 
 	case publog.TypeRollCommit:
 		var roll RollCommit
-		if err := canon.Unmarshal(body, &roll); err != nil {
+		if err := canon.UnmarshalStrict(body, &roll); err != nil {
 			return err
 		}
 		if err := checkRoll(roll.References); err != nil {
@@ -145,7 +145,7 @@ func (v *verifier) entry(log *publog.Report, index uint64, typ string, body []by
 
 	case publog.TypeIssuance:
 		var iss Issuance
-		if err := canon.Unmarshal(body, &iss); err != nil {
+		if err := canon.UnmarshalStrict(body, &iss); err != nil {
 			return err
 		}
 		if len(iss.RollReference) != merkle.HashSize {
@@ -167,7 +167,7 @@ func (v *verifier) entry(log *publog.Report, index uint64, typ string, body []by
 
 	case publog.TypeRegistrationClose:
 		var c RegistrationClose
-		if err := canon.Unmarshal(body, &c); err != nil {
+		if err := canon.UnmarshalStrict(body, &c); err != nil {
 			return err
 		}
 		if c.Issued != v.rep.Issued {
@@ -181,7 +181,7 @@ func (v *verifier) entry(log *publog.Report, index uint64, typ string, body []by
 
 	case publog.TypeBallot:
 		var b Ballot
-		if err := canon.Unmarshal(body, &b); err != nil {
+		if err := canon.UnmarshalStrict(body, &b); err != nil {
 			return err
 		}
 		if err := credential.Verify(v.issuingKey, id, b.CredentialKey, b.CredentialSignature); err != nil {
@@ -195,10 +195,8 @@ func (v *verifier) entry(log *publog.Report, index uint64, typ string, body []by
 			return errors.New("credential used twice")
 		}
 		v.credentials[cred] = true
-		leaf, err := BallotLeaf(b)
-		if err != nil {
-			return err
-		}
+		// The leaf of the logged entry, not of a re-encoding of it.
+		leaf := log.Leaves[index]
 		if len(v.rep.Ballots) > 0 && bytes.Compare(v.lastLeaf[:], leaf[:]) >= 0 {
 			return errors.New("ballots are not ordered by leaf hash")
 		}
@@ -213,7 +211,7 @@ func (v *verifier) entry(log *publog.Report, index uint64, typ string, body []by
 
 	case publog.TypeVotingClose:
 		var c VotingClose
-		if err := canon.Unmarshal(body, &c); err != nil {
+		if err := canon.UnmarshalStrict(body, &c); err != nil {
 			return err
 		}
 		if c.Cast != v.rep.Cast {
@@ -223,7 +221,7 @@ func (v *verifier) entry(log *publog.Report, index uint64, typ string, body []by
 
 	case publog.TypeElectionKey:
 		var k KeyRelease
-		if err := canon.Unmarshal(body, &k); err != nil {
+		if err := canon.UnmarshalStrict(body, &k); err != nil {
 			return err
 		}
 		if err := ballot.MatchElectionKey(log.Manifest.ElectionKey, k.PrivateKey); err != nil {
@@ -273,4 +271,18 @@ func (v *verifier) entry(log *publog.Report, index uint64, typ string, body []by
 		v.rep.Phase = PhaseComplete
 	}
 	return nil
+}
+
+// VerifyFor is Verify for a log that must be the log of the election with
+// the given ID. A service that asks the log service for an election must
+// check this: a log of another election verifies as well.
+func VerifyFor(r io.Reader, id merkle.Hash) (*Report, error) {
+	rep, err := Verify(r, nil)
+	if err != nil {
+		return nil, err
+	}
+	if rep.Log.ElectionID != id {
+		return nil, errors.New("election: the log is of another election")
+	}
+	return rep, nil
 }

@@ -36,9 +36,12 @@ func init() {
 		panic(err)
 	}
 	decMode, err = cbor.DecOptions{
-		DupMapKey:         cbor.DupMapKeyEnforcedAPF,
-		IndefLength:       cbor.IndefLengthForbidden,
-		TagsMd:            cbor.TagsForbidden,
+		DupMapKey:   cbor.DupMapKeyEnforcedAPF,
+		IndefLength: cbor.IndefLengthForbidden,
+		TagsMd:      cbor.TagsForbidden,
+		// "Ciphertext" must not decode into the field "ciphertext": an entry
+		// has one encoding.
+		FieldNameMatching: cbor.FieldNameMatchingCaseSensitive,
 		ExtraReturnErrors: cbor.ExtraDecErrorUnknownField,
 		UTF8:              cbor.UTF8RejectInvalid,
 		// The electoral roll is one array; the library default of 131072
@@ -183,4 +186,23 @@ func (s *SequenceReader) Next() ([]byte, error) {
 		return nil, err
 	}
 	return raw, nil
+}
+
+// UnmarshalStrict is Unmarshal for verification. It also requires that v
+// encodes back to exactly data, so that the decoded value stands for one
+// encoding only: a missing field that decodes to its zero value, or a field
+// that is present with its zero value although the struct omits it, is
+// refused.
+func UnmarshalStrict(data []byte, v any) error {
+	if err := Unmarshal(data, v); err != nil {
+		return err
+	}
+	again, err := Marshal(v)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(again, data) {
+		return errors.New("canon: the item is not the encoding of its decoded value")
+	}
+	return nil
 }

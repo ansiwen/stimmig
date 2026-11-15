@@ -583,3 +583,38 @@ func TestEmptyElection(t *testing.T) {
 		t.Fatalf("report: %+v, result %+v", rep, rep.Result)
 	}
 }
+
+func TestVerifyFor(t *testing.T) {
+	e := runElection(t)
+	data := exportLog(t, e.log)
+	if _, err := VerifyFor(bytes.NewReader(data), e.log.ElectionID()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyFor(bytes.NewReader(data), merkle.Hash{1}); err == nil {
+		t.Fatal("log of another election accepted")
+	}
+}
+
+// A ballot entry with a field of another case, or without a field, is not
+// accepted, because its leaf would differ from that of the decoded ballot.
+func TestVerifyRejectsOtherEncodingsOfABallot(t *testing.T) {
+	e := runElection(t)
+	id := e.log.ElectionID()
+	good := entries(t, e.log)
+	var b0 Ballot
+	if err := canon.Unmarshal(good[9].body.(canon.Raw), &b0); err != nil {
+		t.Fatal(err)
+	}
+	renamed := map[string]any{"credential_key": b0.CredentialKey, "credential_signature": b0.CredentialSignature,
+		"Ciphertext": b0.Ciphertext, "signature": b0.Signature}
+	missing := map[string]any{"credential_key": b0.CredentialKey, "credential_signature": b0.CredentialSignature,
+		"ciphertext": b0.Ciphertext}
+	_ = id
+	for name, body := range map[string]any{"renamed field": renamed, "missing field": missing} {
+		recs := append([]rec(nil), good[:9]...)
+		recs = append(recs, rec{publog.TypeBallot, body})
+		if _, err := Verify(bytes.NewReader(rebuild(t, e.manifest, recs)), nil); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

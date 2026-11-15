@@ -97,7 +97,9 @@ type Report struct {
 	Manifest   Manifest
 	// Entries is the number of log entries, Counts the number per type in
 	// the order of Types.
-	Entries   uint64
+	Entries uint64
+	// Leaves holds the leaf hash of every entry, in log order.
+	Leaves    []merkle.Hash
 	Counts    []uint64
 	TreeHeads uint64
 	// Final is the last tree head. It covers all entries.
@@ -161,7 +163,7 @@ func Verify(r io.Reader, visit func(rep *Report, index uint64, typ string, body 
 				return nil, fmt.Errorf("entry %d: the manifest must be entry 0 and nothing else", index)
 			}
 			if index == 0 {
-				if err := canon.Unmarshal(body, &rep.Manifest); err != nil {
+				if err := canon.UnmarshalStrict(body, &rep.Manifest); err != nil {
 					return nil, fmt.Errorf("manifest: %w", err)
 				}
 				if err := rep.Manifest.Validate(); err != nil {
@@ -169,7 +171,9 @@ func Verify(r io.Reader, visit func(rep *Report, index uint64, typ string, body 
 				}
 				rep.ElectionID = ElectionID(rec.Value)
 			}
-			tree.Append(merkle.LeafHash(rec.Value))
+			leaf := merkle.LeafHash(rec.Value)
+			tree.Append(leaf)
+			rep.Leaves = append(rep.Leaves, leaf)
 			for i, t := range Types {
 				if t == typ {
 					rep.Counts[i]++
