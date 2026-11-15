@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"log"
 	"net/http"
 	"net/smtp"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ansiwen/stimmig/canon"
@@ -76,7 +78,13 @@ type Email struct {
 	Allow func(ctx context.Context, state, address string) bool
 	// Now may be nil for the system clock.
 	Now func() time.Time
+
+	sending sync.WaitGroup
 }
+
+// Wait waits for the mails that are being sent. Tests use it; the service
+// does not need it.
+func (e *Email) Wait() { e.sending.Wait() }
 
 // ID implements Provider.
 func (e *Email) ID() string { return "email" }
@@ -139,10 +147,18 @@ func (e *Email) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			link := e.BaseURL + "/v1/callback/email?" + q.Encode()
 			body := "Open this link to confirm your address and receive your voting credential:\n\n" + link +
 				"\n\nThe link is valid for 30 minutes. If you did not ask for it, ignore this mail."
-			if err := e.Mailer.Send(r.Context(), address, "Your voting credential", body); err != nil {
-				http.Error(w, "the mail could not be sent", http.StatusBadGateway)
-				return
-			}
+			// The mail goes in the background: the time it takes, and a
+			// failure, would tell the voter whether the address is on the
+			// roll.
+			e.sending.Add(1)
+			go func() {
+				defer e.sending.Done()
+				ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+				defer cancel()
+				if err := e.Mailer.Send(ctx, address, "Your voting credential", body); err != nil {
+					log.Printf("identity: a login mail could not be sent: %v", err) // not naming the address
+				}
+			}()
 		}
 		sent = true
 	default:
@@ -150,6 +166,7 @@ func (e *Email) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; form-action 'self'; frame-ancestors 'none'")
 	_ = emailForm.Execute(w, map[string]any{"State": state, "Sent": sent})
 }
 

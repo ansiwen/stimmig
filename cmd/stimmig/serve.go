@@ -110,7 +110,7 @@ func serve(ctx context.Context, role string, stderr io.Writer) error {
 				Secret:  []byte(secret),
 				Mailer:  mailer,
 				Allow: func(ctx context.Context, state, address string) bool {
-					return s.Eligible(ctx, state, "email", address)
+					return s.AllowMail(ctx, state, "email", address)
 				},
 			}}
 			// OpenID Connect is on when an issuer is configured.

@@ -3,6 +3,7 @@ package identity
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -49,6 +50,10 @@ func TestEmail(t *testing.T) {
 	}
 	// An address that is not allowed gets the same answer and no mail.
 	eligible, stranger := post("s1", " Ada@Example.org "), post("s1", "eve@example.org")
+	e.Wait()
+	if eligible.Header().Get("Content-Security-Policy") == "" {
+		t.Error("the form has no content security policy")
+	}
 	if eligible.Code != http.StatusOK || eligible.Body.String() != stranger.Body.String() {
 		t.Fatal("the answer reveals who is on the roll")
 	}
@@ -82,8 +87,7 @@ func TestEmail(t *testing.T) {
 		}
 	}
 	// Another secret, and expiry.
-	other := *e
-	other.Secret = []byte("other")
+	other := &Email{BaseURL: e.BaseURL, Secret: []byte("other"), Mailer: e.Mailer, Allow: e.Allow, Now: e.Now}
 	if _, err := other.Complete(ctx, httptest.NewRequest(http.MethodGet, link, nil)); err == nil {
 		t.Error("link of another secret accepted")
 	}
@@ -97,5 +101,30 @@ func TestSMTPMailerRejectsHeaderInjection(t *testing.T) {
 	m := SMTPMailer{Addr: "127.0.0.1:1", From: "noreply@example.org"}
 	if err := m.Send(context.Background(), "a@example.org\r\nBcc: x@example.org", "s", "b"); err == nil {
 		t.Fatal("line break in the recipient accepted")
+	}
+}
+
+// A mailer that fails gives the same answer as one that works.
+type failingMailer struct{}
+
+func (failingMailer) Send(context.Context, string, string, string) error {
+	return errors.New("smtp down")
+}
+
+func TestEmailAnswerDoesNotDependOnTheMail(t *testing.T) {
+	e := &Email{BaseURL: "https://r.example", Secret: []byte("s"), Mailer: failingMailer{},
+		Allow: func(context.Context, string, string) bool { return true }}
+	post := func(address string) *httptest.ResponseRecorder {
+		form := url.Values{"state": {"s"}, "address": {address}}
+		r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(form.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		e.ServeHTTP(w, r)
+		return w
+	}
+	w := post("ada@example.org")
+	e.Wait()
+	if w.Code != http.StatusOK || w.Body.String() != post("").Body.String() {
+		t.Fatalf("answer %d differs for a failing mailer", w.Code)
 	}
 }

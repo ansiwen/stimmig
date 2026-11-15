@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ansiwen/stimmig/api"
 	"github.com/ansiwen/stimmig/credential"
@@ -31,6 +32,8 @@ var linkPattern = regexp.MustCompile(`http://\S+`)
 type env struct {
 	t         *testing.T
 	db        *sql.DB
+	email     *identity.Email
+	srv       *Server
 	admin     *api.Client // registrar, admin token
 	voter     *api.Client // registrar, no token
 	log       *api.Client // log service, no token
@@ -55,15 +58,17 @@ func setup(t *testing.T) *env {
 	mux := http.NewServeMux()
 	regSrv := httptest.NewServer(mux)
 	t.Cleanup(regSrv.Close)
-	srv := &Server{DB: db, Log: &api.Client{Base: logSrv.URL, Token: "lr"}, AdminToken: "ra", Secret: []byte("confirm secret")}
-	srv.Providers = map[string]identity.Provider{"email": &identity.Email{
+	srv := &Server{DB: db, Log: &api.Client{Base: logSrv.URL, Token: "lr"}, AdminToken: "ra", Secret: []byte("confirm secret"), MailInterval: time.Microsecond}
+	e.srv = srv
+	e.email = &identity.Email{
 		BaseURL: regSrv.URL,
 		Secret:  []byte("secret"),
 		Mailer:  identity.LogMailer{W: e.mails},
 		Allow: func(ctx context.Context, state, address string) bool {
-			return srv.Eligible(ctx, state, "email", address)
+			return srv.AllowMail(ctx, state, "email", address)
 		},
-	}}
+	}
+	srv.Providers = map[string]identity.Provider{"email": e.email}
 	if err := srv.Init(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -124,6 +129,7 @@ func (e *env) login(session api.Session, address string) string {
 		e.t.Fatal(err)
 	}
 	_ = resp.Body.Close()
+	e.email.Wait()
 	if resp.StatusCode != http.StatusOK {
 		e.t.Fatalf("address form: %s", resp.Status)
 	}
@@ -395,5 +401,36 @@ func TestLostCommit(t *testing.T) {
 	exec(`UPDATE reg_elections SET issued = 0`)
 	if err := e.admin.Do(ctx, "POST", e.electPath+"/close", nil, nil); err == nil {
 		t.Fatal("close accepted although the log holds other entries there")
+	}
+}
+
+// A login mail goes to an address once a minute, and the answer is the same
+// when it does not.
+func TestMailLimit(t *testing.T) {
+	e := setup(t)
+	e.srv.MailInterval = 0 // the default of one minute
+	roll := api.Roll{Voters: []api.Voter{{Provider: "email", Subject: "ada@example.org"}}}
+	if err := e.admin.Do(ctx, "PUT", e.electPath+"/roll", roll, nil); err != nil {
+		t.Fatal(err)
+	}
+	_, _, first, _ := e.begin()
+	_, _, second, _ := e.begin()
+	if e.login(first, "ada@example.org") == "" {
+		t.Fatal("no first mail")
+	}
+	if link := e.login(second, "Ada@example.org"); link != "" {
+		t.Fatal("a second mail within the minute")
+	}
+	// The limit holds addresses of the roll and others alike.
+	if link := e.login(second, "eve@example.org"); link != "" {
+		t.Fatal("mail to an address that is not on the roll")
+	}
+	var n int
+	if err := e.db.QueryRow(`SELECT count(*) FROM reg_mail`).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("%d limits, %v", n, err)
+	}
+	var key []byte
+	if err := e.db.QueryRow(`SELECT key FROM reg_mail LIMIT 1`).Scan(&key); err != nil || bytes.Contains(key, []byte("example.org")) {
+		t.Fatal("the limit keeps the address")
 	}
 }

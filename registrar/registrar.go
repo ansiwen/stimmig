@@ -40,6 +40,9 @@ import (
 //go:embed schema.sql
 var schema string
 
+//go:embed schema_mail.sql
+var schemaMail string
+
 // SessionValidity is how long a voter has to log in.
 const SessionValidity = time.Hour
 
@@ -72,6 +75,8 @@ type Server struct {
 	// Secret authenticates the step between login and confirmation. All
 	// replicas share it.
 	Secret []byte
+	// MailInterval overrides DefaultMailInterval. Tests set it very small.
+	MailInterval time.Duration
 }
 
 // sealer returns the key store, or the unencrypted one if none is set.
@@ -84,7 +89,7 @@ func (s *Server) sealer() keystore.Sealer {
 
 // Init creates the tables if they are missing.
 func (s *Server) Init(ctx context.Context) error {
-	return api.Migrate(ctx, s.DB, "registrar", []string{schema})
+	return api.Migrate(ctx, s.DB, "registrar", []string{schema, schemaMail})
 }
 
 // Handler returns the routes of the service.
@@ -395,6 +400,13 @@ func (s *Server) newSession(w http.ResponseWriter, r *http.Request) (any, error)
 	if len(req.Blinded) != key.Size() {
 		return nil, api.Errorf(http.StatusBadRequest, "the blinded value must have %d bytes", key.Size())
 	}
+	// Old sessions and limits are of no use any more.
+	if _, err := s.DB.ExecContext(ctx, `DELETE FROM reg_sessions WHERE expires < now() - interval '1 day'`); err != nil {
+		return nil, err
+	}
+	if _, err := s.DB.ExecContext(ctx, `DELETE FROM reg_mail WHERE last < now() - interval '1 day'`); err != nil {
+		return nil, err
+	}
 	token := make([]byte, 32)
 	if _, err := rand.Read(token); err != nil {
 		return nil, err
@@ -431,6 +443,38 @@ func (s *Server) session(ctx context.Context, q interface {
 		return id, nil, err
 	}
 	return merkle.Hash(rawID), blinded, nil
+}
+
+// DefaultMailInterval is the shortest time between two login mails to one
+// address of one election, unless Server.MailInterval says otherwise.
+const DefaultMailInterval = time.Minute
+
+// AllowMail reports whether the email provider may mail a login link to an
+// address for a registration session: at most one mail per address and
+// minute, and only to addresses on the roll. The limit counts every address,
+// so that it does not tell whether one is on the roll. It keeps a keyed
+// hash of the address, not the address.
+func (s *Server) AllowMail(ctx context.Context, session, provider, subject string) bool {
+	id, _, err := s.session(ctx, s.DB, session)
+	if err != nil {
+		return false
+	}
+	interval := s.MailInterval
+	if interval == 0 {
+		interval = DefaultMailInterval
+	}
+	key := s.mac([]byte("stimmig-mail-limit-v1\x00" + provider + "\x00" + subject))
+	res, err := s.DB.ExecContext(ctx,
+		`INSERT INTO reg_mail (election, key, last) VALUES ($1, $2, now())
+		 ON CONFLICT (election, key) DO UPDATE SET last = now() WHERE reg_mail.last < now() - make_interval(secs => $3)`,
+		id[:], key, interval.Seconds())
+	if err != nil {
+		return false
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return false
+	}
+	return s.Eligible(ctx, session, provider, subject)
 }
 
 // Eligible reports whether a subject is on the roll of the election of a

@@ -91,11 +91,11 @@ func TestElectionFromCommandLine(t *testing.T) {
 	regMux := http.NewServeMux()
 	regSrv := httptest.NewServer(regMux)
 	defer regSrv.Close()
-	reg := &registrar.Server{DB: db, Log: &api.Client{Base: logSrv.URL, Token: "lr"}, AdminToken: "ra", Keys: keys, Secret: []byte("confirm secret")}
+	reg := &registrar.Server{DB: db, Log: &api.Client{Base: logSrv.URL, Token: "lr"}, AdminToken: "ra", Keys: keys, Secret: []byte("confirm secret"), MailInterval: time.Microsecond}
 	reg.Providers = map[string]identity.Provider{"email": &identity.Email{
 		BaseURL: regSrv.URL, Secret: []byte("secret"), Mailer: mails,
 		Allow: func(ctx context.Context, state, address string) bool {
-			return reg.Eligible(ctx, state, "email", address)
+			return reg.AllowMail(ctx, state, "email", address)
 		},
 	}}
 	if err := reg.Init(ctx); err != nil {
