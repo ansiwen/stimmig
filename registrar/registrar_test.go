@@ -561,3 +561,34 @@ func TestNoScheduleNoAction(t *testing.T) {
 		t.Fatalf("an election without a schedule changed: %s", rep.Phase)
 	}
 }
+
+// The registration closes although the last issuance's transaction was lost:
+// the registrar adopts the entry of the log first.
+func TestCloseCatchesUp(t *testing.T) {
+	e := setup(t)
+	roll := api.Roll{Voters: []api.Voter{{Provider: "email", Subject: "ada@example.org"}}}
+	if err := e.admin.Do(ctx, "PUT", e.electPath+"/roll", roll, nil); err != nil {
+		t.Fatal(err)
+	}
+	_, _, session, err := e.begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := open(t, e.login(session, "ada@example.org"), session.Code); code != http.StatusOK {
+		t.Fatalf("registration: %d", code)
+	}
+	for _, q := range []string{
+		`UPDATE reg_roll SET seq = NULL, blinded = NULL, blind_sig = NULL`,
+		`UPDATE reg_elections SET issued = 0, log_size = log_size - 1`,
+	} {
+		if _, err := e.db.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := e.admin.Do(ctx, "POST", e.electPath+"/close", nil, nil); err != nil {
+		t.Fatalf("close with an issuance missing in the database: %v", err)
+	}
+	if rep := e.report(); rep.Phase != election.PhaseRegistrationClosed || rep.Issued != 1 || rep.Log.Entries != 4 {
+		t.Fatalf("after the close: %+v", rep)
+	}
+}

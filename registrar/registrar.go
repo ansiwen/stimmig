@@ -335,20 +335,40 @@ func (s *Server) close(_ http.ResponseWriter, r *http.Request) (any, error) {
 	return nil, s.closeRegistration(ctx, id)
 }
 
-// closeRegistration closes the registration of an election.
+// closeRegistration closes the registration of an election. If the log holds
+// issuances that the registrar's database lost, it adopts them first, as an
+// issuance does; otherwise the registration could not close until a voter
+// came back.
 func (s *Server) closeRegistration(ctx context.Context, id merkle.Hash) error {
 	return api.InTx(ctx, s.DB, func(tx *sql.Tx) error {
-		st, err := lock(ctx, tx, id)
-		if err != nil {
+		if _, err := tx.ExecContext(ctx, `SAVEPOINT close`); err != nil {
 			return err
 		}
-		if st.phase != phaseOpen {
-			return api.Errorf(http.StatusConflict, "registration is not open")
+		err := s.closeOnce(ctx, tx, id)
+		if !errors.Is(err, errLogBehind) {
+			return err
 		}
-		st.phase = phaseClosed
-		return s.logAppend(ctx, tx, st, publog.Record{
-			Type: publog.TypeRegistrationClose, Body: election.RegistrationClose{Issued: st.issued},
-		})
+		if _, rbErr := tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT close`); rbErr != nil {
+			return rbErr
+		}
+		if adopted, cErr := s.catchUp(ctx, tx, id); cErr != nil || !adopted {
+			return err
+		}
+		return s.closeOnce(ctx, tx, id)
+	})
+}
+
+func (s *Server) closeOnce(ctx context.Context, tx *sql.Tx, id merkle.Hash) error {
+	st, err := lock(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if st.phase != phaseOpen {
+		return api.Errorf(http.StatusConflict, "registration is not open")
+	}
+	st.phase = phaseClosed
+	return s.logAppend(ctx, tx, st, publog.Record{
+		Type: publog.TypeRegistrationClose, Body: election.RegistrationClose{Issued: st.issued},
 	})
 }
 
