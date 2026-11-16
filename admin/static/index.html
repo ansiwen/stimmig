@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Stimmig admin</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header><h1>Stimmig admin</h1><button type="button" id="signout" hidden>Sign out</button></header>
+<main>
+  <p id="status" role="status" aria-live="polite"></p>
+  <p id="error" role="alert" hidden></p>
+
+  <section id="login" hidden aria-labelledby="login-h">
+    <h2 id="login-h">Sign in</h2>
+    <label for="token">Admin web token</label>
+    <input id="token" type="password" autocomplete="off">
+    <p><button type="button" id="signin">Sign in</button></p>
+  </section>
+
+  <div id="app" hidden>
+    <section aria-labelledby="list-h">
+      <h2 id="list-h">Elections</h2>
+      <table>
+        <thead><tr><th>Title</th><th>Registrar</th><th>ID</th></tr></thead>
+        <tbody id="elections"></tbody>
+      </table>
+    </section>
+
+    <section id="detail" hidden aria-labelledby="detail-h">
+      <h2 id="detail-h">Election</h2>
+      <dl id="facts"></dl>
+      <div class="actions" id="steps"></div>
+      <div id="roll-box" hidden>
+        <label for="voters">Voters, one per line: an email address, or oidc:&lt;issuer&gt;#&lt;sub&gt;</label>
+        <textarea id="voters" rows="8" spellcheck="false"></textarea>
+        <p><button type="button" id="roll">Publish the roll and open the registration</button></p>
+      </div>
+      <p id="winners"></p>
+    </section>
+
+    <section aria-labelledby="new-h">
+      <h2 id="new-h">New election</h2>
+      <label for="definition">Definition (JSON, as for <code>stimmig admin create</code>)</label>
+      <textarea id="definition" rows="16" spellcheck="false"></textarea>
+      <div class="actions">
+        <button type="button" id="preview">Check</button>
+        <button type="button" id="create">Create the election</button>
+      </div>
+    </section>
+  </div>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

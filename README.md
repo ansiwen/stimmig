@@ -14,7 +14,7 @@ The project follows the milestones of SPEC.md section 13.
 | M2: Log | Done; the log is in memory until the services arrive in M4 |
 | M3: Cryptography | Done |
 | M4: Services | Done; see the open points in SPEC.md section 14 |
-| M5: Web client | Voting client done; the admin interface is the command line |
+| M5: Web client | Voting client and admin web page done |
 | M6: Deployment | Image, Helm chart and encrypted key store done; no PKCS#11 HSM |
 | M7: Identity | OpenID Connect done; ATProto not built |
 | M8: Review | Protocol model done (`model/`, ProVerif); no external review yet |
@@ -139,6 +139,17 @@ go run ./cmd/stimmig admin close-voting -election $ID
 go run ./cmd/stimmig admin tally -election $ID
 go run ./cmd/stimmig client check -state ada.json
 ```
+
+The admin web page does the same in a browser. It needs the three admin tokens
+in its environment and a token of its own that the page asks for:
+
+```bash
+export STIMMIG_ADMINWEB_TOKEN=a-long-token-of-your-own   # at least 16 characters
+go run ./cmd/stimmig admin-web                           # http://127.0.0.1:8090/
+```
+
+It speaks HTTP and listens on the loopback address; put TLS in front of it for
+any other address.
 
 Anyone can download and verify the log:
 

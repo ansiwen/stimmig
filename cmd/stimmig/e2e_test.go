@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -230,6 +231,55 @@ func TestElectionFromCommandLine(t *testing.T) {
 	list, err := ac.List(ctx)
 	if err != nil || len(list) != 1 || list[0].Title != "Board election" || !list[0].Tallied {
 		t.Fatalf("list: %+v, %v", list, err)
+	}
+
+	// The admin web page's interface needs its token and does the same.
+	webSrv := httptest.NewServer(ac.Handler("web token"))
+	defer webSrv.Close()
+	webCall := func(method, path, token, body string) (int, string) {
+		req, err := http.NewRequestWithContext(ctx, method, webSrv.URL+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	if code, _ := webCall("GET", "/api/elections", "", ""); code != http.StatusUnauthorized {
+		t.Errorf("without a token: %d", code)
+	}
+	if code, _ := webCall("GET", "/api/elections", "wrong", ""); code != http.StatusUnauthorized {
+		t.Errorf("with a wrong token: %d", code)
+	}
+	if code, body := webCall("GET", "/api/elections", "web token", ""); code != http.StatusOK || !strings.Contains(body, `"title":"Board election"`) || !strings.Contains(body, `"id":"`+id+`"`) {
+		t.Errorf("list: %d %s", code, body)
+	}
+	if code, body := webCall("GET", "/api/elections/"+id, "web token", ""); code != http.StatusOK || !strings.Contains(body, `"phase":"complete"`) {
+		t.Errorf("status: %d %s", code, body)
+	}
+	if code, body := webCall("POST", "/api/preview", "web token", `{"title":"x","tally":{"candidates":["A","B","C"],"method":"schulze"}}`); code != http.StatusOK || !strings.Contains(body, `"possible_ballots":"25"`) {
+		t.Errorf("preview: %d %s", code, body)
+	}
+	if code, body := webCall("POST", "/api/preview", "web token", `{"title":"x","tally":{"candidates":["A"],"method":"plurality"}}`); code != http.StatusBadRequest {
+		t.Errorf("bad definition: %d %s", code, body)
+	}
+	if code, _ := webCall("POST", "/api/elections/"+id+"/nonsense", "web token", ""); code != http.StatusBadRequest {
+		t.Errorf("unknown step: %d", code)
+	}
+	if code, body := webCall("POST", "/api/elections", "web token", `{"title":"From the page","tally":{"candidates":["A","B"],"method":"schulze"}}`); code != http.StatusOK {
+		t.Errorf("create: %d %s", code, body)
+	} else if code, body := webCall("PUT", "/api/elections/"+body[len(`{"id":"`):len(`{"id":"`)+64]+"/roll", "web token", `{"voters":"x@example.org\n"}`); code != http.StatusOK || !strings.Contains(body, `"voters":1`) {
+		t.Errorf("roll: %d %s", code, body)
+	}
+	if code, body := webCall("GET", "/", "", ""); code != http.StatusOK || !strings.Contains(body, "Stimmig admin") {
+		t.Errorf("page: %d", code)
 	}
 
 	// An election that the schedule drives: the services close and open the

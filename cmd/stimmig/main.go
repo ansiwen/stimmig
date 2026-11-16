@@ -30,6 +30,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runServe(args[0], stderr)
 	case "admin":
 		return runAdmin(args[1:], stdout, stderr)
+	case "admin-web":
+		return runAdminWeb(stderr)
 	case "client":
 		return runClient(args[1:], stdout, stderr)
 	}
@@ -40,7 +42,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 func usage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "usage: stimmig <command> [flags]")
 	_, _ = fmt.Fprintln(w, "services: log, registrar, ballotbox")
-	_, _ = fmt.Fprintln(w, "tools:    admin, client, verify, tally")
+	_, _ = fmt.Fprintln(w, "tools:    admin, admin-web, client, verify, tally")
 }
 
 func runTally(args []string, stdout, stderr io.Writer) int {

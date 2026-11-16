@@ -153,6 +153,29 @@ const assert = (cond, msg) => { if (!cond) throw new Error('FAILED: ' + msg); co
   assert(result.includes('Bob > Ada') && result.includes('Winners: Bob'), 'after the tally the page shows the decrypted ballot and the result');
   await page.screenshot({ path: dir + '/done.png', fullPage: true });
 
+  // The admin page: sign in, see the election, create another, publish its roll.
+  const adm = await browser.newPage();
+  adm.on('pageerror', (e) => problems.push(String(e)));
+  adm.on('console', (m) => { if (m.type() === 'error' && !/40[19]/.test(m.text())) problems.push(m.text()); });
+  await adm.goto('http://127.0.0.1:18090/');
+  await adm.fill('#token', 'wrong');
+  await adm.click('#signin');
+  await adm.waitForSelector('#error:not([hidden])');
+  assert((await adm.textContent('#error')).includes('token'), 'the admin page refuses a wrong token');
+  await adm.fill('#token', 'admin-web-token-0123');
+  await adm.click('#signin');
+  await adm.waitForSelector('#elections tr');
+  assert((await adm.textContent('#elections')).includes('Browser test'), 'the admin page lists the elections: ' + JSON.stringify(await adm.textContent('#elections')));
+  await adm.click('#elections tr');
+  await adm.waitForSelector('#winners:has-text("Winners: Bob")');
+  assert((await adm.textContent('#facts')).includes('complete'), 'the admin page shows the state of a finished election');
+  await adm.click('#create');
+  await adm.waitForSelector('#status:has-text("Election created")');
+  await adm.fill('#voters', 'ada@example.org\nbob@example.org\n');
+  await adm.click('#roll');
+  await adm.waitForSelector('#status:has-text("The roll is published")');
+  assert((await adm.textContent('#facts')).includes('Eligible / issued / cast2 / 0 / 0') || (await adm.textContent('#facts')).includes('2 / 0 / 0'), 'the admin page publishes a roll');
+
   assert(problems.length === 0, 'no console errors or content security policy violations: ' + problems.join(' | '));
   await browser.close();
 })().catch((e) => { console.error(e.message); process.exit(1); });

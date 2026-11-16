@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -268,11 +269,24 @@ func (c *Client) Status(ctx context.Context, id merkle.Hash) (*Status, error) {
 	}, nil
 }
 
+// Election is one entry of the list of elections.
+type Election struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	// Phase is the phase at the registrar: setup, open or closed.
+	Phase   string `json:"phase"`
+	Tallied bool   `json:"tallied"`
+}
+
 // List returns the elections that the registrar knows, newest first.
-func (c *Client) List(ctx context.Context) ([]api.ElectionInfo, error) {
+func (c *Client) List(ctx context.Context) ([]Election, error) {
 	var list api.ElectionList
 	if err := c.Registrar.Do(ctx, "GET", "/v1/elections", nil, &list); err != nil {
 		return nil, err
 	}
-	return list.Elections, nil
+	out := make([]Election, 0, len(list.Elections))
+	for _, e := range list.Elections {
+		out = append(out, Election{ID: hex.EncodeToString(e.ID), Title: e.Title, Phase: e.Phase, Tallied: e.Tallied})
+	}
+	return out, nil
 }
