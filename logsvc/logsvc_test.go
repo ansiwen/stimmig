@@ -93,22 +93,22 @@ func TestLogService(t *testing.T) {
 	if err := box.Do(ctx, "POST", path+"/entries", roll, nil); !api.IsStatus(err, http.StatusForbidden) {
 		t.Fatalf("roll from the ballot box: %v", err)
 	}
-	ballot := api.Append{Entries: []canon.Raw{entry(t, publog.TypeBallot, map[string]int{})}}
+	ballot := api.Append{Entries: []canon.Raw{entry(t, publog.TypeBallot, map[string]int{})}, ExpectSize: &one}
 	if err := registrar.Do(ctx, "POST", path+"/entries", ballot, nil); !api.IsStatus(err, http.StatusForbidden) {
 		t.Fatalf("ballot from the registrar: %v", err)
 	}
-	manifest := api.Append{Entries: []canon.Raw{entry(t, publog.TypeManifest, m)}}
+	manifest := api.Append{Entries: []canon.Raw{entry(t, publog.TypeManifest, m)}, ExpectSize: &one}
 	if err := registrar.Do(ctx, "POST", path+"/entries", manifest, nil); err == nil {
 		t.Fatal("second manifest appended")
 	}
-	garbage := api.Append{Entries: []canon.Raw{{0x01}}}
+	garbage := api.Append{Entries: []canon.Raw{{0x01}}, ExpectSize: &one}
 	if err := registrar.Do(ctx, "POST", path+"/entries", garbage, nil); !api.IsStatus(err, http.StatusBadRequest) {
 		t.Fatalf("garbage entry: %v", err)
 	}
 
 	// The lifecycle order: after the manifest comes the roll, nothing else.
 	for _, typ := range []string{publog.TypeIssuance, publog.TypeResult, publog.TypeRegistrationClose} {
-		out := api.Append{Entries: []canon.Raw{entry(t, typ, map[string]int{})}}
+		out := api.Append{Entries: []canon.Raw{entry(t, typ, map[string]int{})}, ExpectSize: &one}
 		if err := registrar.Do(ctx, "POST", path+"/entries", out, nil); !api.IsStatus(err, http.StatusConflict) {
 			t.Fatalf("%s after the manifest: %v", typ, err)
 		}
@@ -128,16 +128,33 @@ func TestLogService(t *testing.T) {
 		t.Fatalf("malformed election ID: %v", err)
 	}
 
-	// Concurrent appends from several writers all land, in some order.
+	// An append that does not say which size it expects is refused.
+	if err := registrar.Do(ctx, "POST", path+"/entries", api.Append{Entries: []canon.Raw{entry(t, publog.TypeIssuance, map[string]int{})}}, nil); !api.IsStatus(err, http.StatusBadRequest) {
+		t.Fatalf("append without expect_size: %v", err)
+	}
+	// Concurrent writers that retry on a conflict all land, in some order.
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			req := api.Append{Entries: []canon.Raw{entry(t, publog.TypeIssuance, map[string]int{"sequence": i})}}
-			if err := registrar.Do(ctx, "POST", path+"/entries", req, nil); err != nil {
-				t.Error(err)
+			for attempt := 0; attempt < 200; attempt++ {
+				var h publog.TreeHead
+				if err := public.Do(ctx, "GET", path+"/head", nil, &h); err != nil {
+					t.Error(err)
+					return
+				}
+				req := api.Append{Entries: []canon.Raw{entry(t, publog.TypeIssuance, map[string]int{"sequence": i})}, ExpectSize: &h.Size}
+				err := registrar.Do(ctx, "POST", path+"/entries", req, nil)
+				if err == nil {
+					return
+				}
+				if !api.IsStatus(err, http.StatusConflict) {
+					t.Error(err)
+					return
+				}
 			}
+			t.Error("append did not succeed in 200 attempts")
 		}()
 	}
 	wg.Wait()

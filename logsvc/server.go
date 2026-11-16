@@ -3,6 +3,7 @@ package logsvc
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -171,9 +172,23 @@ func (s *Server) appendEntries(w http.ResponseWriter, r *http.Request) {
 	// The entries follow the lifecycle of an election, so that nobody who
 	// holds a writer token can make the log unverifiable by writing an
 	// entry out of its place.
+	// The size the writer expects is required: the order is checked against the
+	// last entry at that size, and the append fails if the log has grown.
+	if req.ExpectSize == nil {
+		http.Error(w, "expect_size is required", http.StatusBadRequest)
+		return
+	}
 	size, err := s.Store.Size(r.Context(), id)
 	if err != nil {
 		fail(w, err)
+		return
+	}
+	if size == 0 {
+		http.Error(w, "the log has no manifest", http.StatusConflict)
+		return
+	}
+	if *req.ExpectSize != size {
+		http.Error(w, fmt.Sprintf("the log has %d entries, expected %d", size, *req.ExpectSize), http.StatusConflict)
 		return
 	}
 	last, err := s.Store.Entries(r.Context(), id, size-1, size)
@@ -198,10 +213,7 @@ func (s *Server) appendEntries(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	expect := int64(-1)
-	if req.ExpectSize != nil {
-		expect = int64(*req.ExpectSize) //nolint:gosec // log sizes fit in int64
-	}
+	expect := int64(*req.ExpectSize) //nolint:gosec // log sizes fit in int64
 	h, err := publog.Open(s.Store, id, signer, nil).AppendAll(r.Context(), expect, records)
 	if err != nil {
 		fail(w, err)
