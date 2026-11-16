@@ -192,7 +192,7 @@ func serve(ctx context.Context, role string, stderr io.Writer) error {
 		Addr: listen, Handler: h,
 		// net/http logs the address of a client whose handler panicked; the
 		// ballot box must not record one.
-		ErrorLog: errorLog(role, stderr),
+		ErrorLog:          errorLog(role, stderr),
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
 		WriteTimeout: 5 * time.Minute, IdleTimeout: 2 * time.Minute,
 	}

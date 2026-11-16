@@ -176,6 +176,8 @@ func TestServicesNeedTheirKeysAndMail(t *testing.T) {
 	}
 	var out, errOut bytes.Buffer
 	// Without a key-encryption key no service starts.
+	t.Setenv("STIMMIG_SMTP_ADDR", "smtp.example:25")
+	t.Setenv("STIMMIG_SMTP_FROM", "vote@example.org")
 	for _, role := range []string{"log", "registrar", "ballotbox"} {
 		errOut.Reset()
 		if code := run([]string{role}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "STIMMIG_KEY_ENCRYPTION_KEY is not set") {
@@ -184,6 +186,7 @@ func TestServicesNeedTheirKeysAndMail(t *testing.T) {
 	}
 	// Without an SMTP server the registrar does not start either.
 	t.Setenv("STIMMIG_KEY_ENCRYPTION_KEY", strings.Repeat("ab", 32))
+	t.Setenv("STIMMIG_SMTP_ADDR", "")
 	errOut.Reset()
 	if code := run([]string{"registrar"}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "STIMMIG_SMTP_ADDR is not set") {
 		t.Errorf("registrar without SMTP: exit %d: %s", code, errOut.String())
