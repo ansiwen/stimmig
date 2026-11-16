@@ -125,7 +125,7 @@ func TestBallotBox(t *testing.T) {
 	if err := admin.Do(ctx, "POST", path+"/open", nil, nil); !api.IsStatus(err, http.StatusConflict) {
 		t.Fatalf("open during registration: %v", err)
 	}
-	if _, err := cast(key0, sig0, tally.Ballot{{"A"}}); !api.IsStatus(err, http.StatusConflict) {
+	if _, err := cast(key0, sig0, tally.Ballot{{"A"}}); !api.IsStatus(err, http.StatusTooEarly) {
 		t.Fatalf("ballot before the opening: %v", err)
 	}
 	closeReg := []publog.Record{{Type: publog.TypeRegistrationClose, Body: election.RegistrationClose{Issued: 2}}}
@@ -194,8 +194,21 @@ func TestBallotBox(t *testing.T) {
 	if err := admin.Do(ctx, "POST", path+"/close", nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cast(key1, sig1, tally.Ballot{{"B"}}); !api.IsStatus(err, http.StatusConflict) {
+	if _, err := cast(key1, sig1, tally.Ballot{{"B"}}); !api.IsStatus(err, http.StatusGone) {
 		t.Fatalf("ballot after the close: %v", err)
+	}
+	// A ballot that was stored gets its receipt again after the close, as
+	// the answer to the voter may have been lost; another ballot does not.
+	var later api.Receipt
+	if err := voter.Do(ctx, "POST", path+"/ballots", b0, &later); err != nil || !bytes.Equal(later.Receipt, receipt.Receipt) {
+		t.Fatalf("the stored ballot after the close: %v", err)
+	}
+	other, err := election.Cast(rand.Reader, m, id, key0, sig0, tally.Ballot{{"C"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := voter.Do(ctx, "POST", path+"/ballots", other, nil); !api.IsStatus(err, http.StatusGone) {
+		t.Fatalf("another ballot of that credential after the close: %v", err)
 	}
 	if err := admin.Do(ctx, "POST", path+"/close", nil, nil); !api.IsStatus(err, http.StatusConflict) {
 		t.Fatalf("second close: %v", err)
@@ -322,6 +335,9 @@ func TestClientBundle(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
 	csp := resp.Header.Get("Content-Security-Policy")
+	if !strings.Contains(csp, "connect-src 'self' https://log.example https://registrar.example;") {
+		t.Fatalf("content security policy: %s", csp)
+	}
 	if !strings.Contains(string(body), "<title>client</title>") || !strings.Contains(csp, "default-src 'self'") ||
 		!strings.Contains(csp, "frame-ancestors 'none'") || resp.Header.Get("Set-Cookie") != "" {
 		t.Fatalf("page: %s, headers %v", body, resp.Header)

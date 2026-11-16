@@ -17,8 +17,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/ansiwen/stimmig/api"
 	"github.com/ansiwen/stimmig/ballot"
@@ -90,8 +92,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/elections/{id}/ballots", api.Handle(s.cast))
 	mux.HandleFunc("GET /v1/elections/{id}", api.Handle(s.status))
 	if s.ClientDir != "" {
+		bundleHash := sync.OnceValues(func() ([]byte, error) { return ClientHash(s.ClientDir) })
 		mux.HandleFunc("GET /v1/client", api.Handle(func(http.ResponseWriter, *http.Request) (any, error) {
-			hash, err := ClientHash(s.ClientDir)
+			hash, err := bundleHash()
 			return api.ClientBundle{Hash: hash}, err
 		}))
 		mux.HandleFunc("GET /v1/config", api.Handle(func(http.ResponseWriter, *http.Request) (any, error) {
@@ -102,8 +105,8 @@ func (s *Server) Handler() http.Handler {
 			// The page holds the credential: it may load code only from
 			// this origin, and it may not be framed.
 			w.Header().Set("Content-Security-Policy",
-				"default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src https: http:; "+
-					"base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+				"default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' "+
+					origin(s.LogURL)+" "+origin(s.RegistrarURL)+"; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 			w.Header().Set("X-Content-Type-Options", "nosniff")
 			w.Header().Set("Referrer-Policy", "no-referrer")
 			w.Header().Set("Cache-Control", "no-cache")
@@ -306,32 +309,48 @@ func (s *Server) cast(w http.ResponseWriter, r *http.Request) (any, error) {
 		if err != nil {
 			return err
 		}
-		if phase != PhaseOpen {
-			return api.Errorf(http.StatusConflict, "the voting is not open")
-		}
 		var m publog.Manifest
 		if err := canon.Unmarshal(rawManifest, &m); err != nil {
 			return err
 		}
-		if err := election.CheckBallot(m, id, b); err != nil {
-			return api.Errorf(http.StatusForbidden, "%v", err)
-		}
-		res, err := tx.ExecContext(ctx,
-			`INSERT INTO box_ballots (election, credential, ballot) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
-			id[:], b.CredentialKey, raw)
-		if err != nil {
-			return err
-		}
-		if n, _ := res.RowsAffected(); n != 1 {
-			// The same ballot again gets its receipt again, so that a voter
-			// whose connection broke can retry. Another ballot is refused.
+		if phase != PhaseOpen {
+			// A ballot that is stored already gets its receipt again, also
+			// after the voting has closed: the answer may have been lost.
+			// Anything else is refused with a status that tells the client
+			// that this ballot is not stored.
 			var stored []byte
-			if err := tx.QueryRowContext(ctx,
-				`SELECT ballot FROM box_ballots WHERE election = $1 AND credential = $2`, id[:], b.CredentialKey).Scan(&stored); err != nil {
+			err := tx.QueryRowContext(ctx,
+				`SELECT ballot FROM box_ballots WHERE election = $1 AND credential = $2`, id[:], b.CredentialKey).Scan(&stored)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return err
 			}
-			if !bytes.Equal(stored, raw) {
-				return api.Errorf(http.StatusConflict, "this credential has already voted")
+			if err != nil || !bytes.Equal(stored, raw) {
+				if phase == PhaseSetup {
+					return api.Errorf(http.StatusTooEarly, "the voting has not opened yet")
+				}
+				return api.Errorf(http.StatusGone, "the voting is closed")
+			}
+		} else {
+			if err := election.CheckBallot(m, id, b); err != nil {
+				return api.Errorf(http.StatusForbidden, "%v", err)
+			}
+			res, err := tx.ExecContext(ctx,
+				`INSERT INTO box_ballots (election, credential, ballot) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+				id[:], b.CredentialKey, raw)
+			if err != nil {
+				return err
+			}
+			if n, _ := res.RowsAffected(); n != 1 {
+				// The same ballot again gets its receipt again, so that a voter
+				// whose connection broke can retry. Another ballot is refused.
+				var stored []byte
+				if err := tx.QueryRowContext(ctx,
+					`SELECT ballot FROM box_ballots WHERE election = $1 AND credential = $2`, id[:], b.CredentialKey).Scan(&stored); err != nil {
+					return err
+				}
+				if !bytes.Equal(stored, raw) {
+					return api.Errorf(http.StatusConflict, "this credential has already voted")
+				}
 			}
 		}
 		if m.ReceiptMode != publog.ReceiptFull {
@@ -397,4 +416,13 @@ func ClientHash(dir string) ([]byte, error) {
 	}
 	sum := sha256.Sum256(encoded)
 	return sum[:], nil
+}
+
+// origin returns scheme and host of a URL, for the content security policy.
+func origin(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
 }
