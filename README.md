@@ -87,14 +87,14 @@ The services need PostgreSQL. Each service gets its own database:
 
 ```bash
 export STIMMIG_DATABASE_URL=postgres://stimmig:secret@localhost/stimmig_log
-export STIMMIG_LISTEN=127.0.0.1:8081 STIMMIG_ADMIN_TOKEN=log-admin
+export STIMMIG_LISTEN=127.0.0.1:8081 STIMMIG_ADMIN_TOKEN=log-admin STIMMIG_ALLOW_PLAIN_KEYS=1
 export STIMMIG_REGISTRAR_TOKEN=log-registrar STIMMIG_BALLOTBOX_TOKEN=log-ballotbox
 go run ./cmd/stimmig log
 ```
 
 ```bash
 export STIMMIG_DATABASE_URL=postgres://stimmig:secret@localhost/stimmig_registrar
-export STIMMIG_LISTEN=127.0.0.1:8082 STIMMIG_ADMIN_TOKEN=registrar-admin
+export STIMMIG_LISTEN=127.0.0.1:8082 STIMMIG_ADMIN_TOKEN=registrar-admin STIMMIG_ALLOW_PLAIN_KEYS=1 STIMMIG_PRINT_MAILS=1
 export STIMMIG_LOG_URL=http://127.0.0.1:8081 STIMMIG_LOG_TOKEN=log-registrar
 export STIMMIG_PUBLIC_URL=http://127.0.0.1:8082
 export STIMMIG_EMAIL_SECRET=change-me-to-32-random-characters
@@ -103,13 +103,16 @@ go run ./cmd/stimmig registrar
 
 ```bash
 export STIMMIG_DATABASE_URL=postgres://stimmig:secret@localhost/stimmig_ballotbox
-export STIMMIG_LISTEN=127.0.0.1:8083 STIMMIG_ADMIN_TOKEN=ballotbox-admin
+export STIMMIG_LISTEN=127.0.0.1:8083 STIMMIG_ADMIN_TOKEN=ballotbox-admin STIMMIG_ALLOW_PLAIN_KEYS=1
 export STIMMIG_LOG_URL=http://127.0.0.1:8081 STIMMIG_LOG_TOKEN=log-ballotbox
 go run ./cmd/stimmig ballotbox
 ```
 
-Without `STIMMIG_SMTP_ADDR` the registrar prints the login mails instead of
-sending them. The admin drives the election:
+The services do not start without `STIMMIG_KEY_ENCRYPTION_KEY` (64 hexadecimal
+characters, it encrypts the private keys in the database), and the registrar
+not without `STIMMIG_SMTP_ADDR` and `STIMMIG_SMTP_FROM`. For development set
+`STIMMIG_ALLOW_PLAIN_KEYS=1` and `STIMMIG_PRINT_MAILS=1`: the registrar then
+prints the login mails instead of sending them. The admin drives the election:
 
 ```bash
 export STIMMIG_LOG_URL=http://127.0.0.1:8081 STIMMIG_LOG_ADMIN_TOKEN=log-admin
