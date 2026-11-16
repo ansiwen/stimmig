@@ -120,8 +120,11 @@ func (st *State) request(ctx context.Context) (*credential.Request, error) {
 		return nil, err
 	}
 	p := st.Pending
+	if len(p.CredentialKey) != ed25519.PrivateKeySize {
+		return nil, errors.New("client: malformed credential key")
+	}
 	pub, ok := ed25519.PrivateKey(p.CredentialKey).Public().(ed25519.PublicKey)
-	if !ok || len(p.CredentialKey) != ed25519.PrivateKeySize {
+	if !ok {
 		return nil, errors.New("client: malformed credential key")
 	}
 	req, err := credential.NewRequestFromSeed(p.Seed, issuingKey, st.id(), pub)

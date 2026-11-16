@@ -11,7 +11,7 @@ const LOG = 'http://127.0.0.1:18081', REG = 'http://127.0.0.1:18082', BOX = 'htt
 const env = {
   ...process.env,
   STIMMIG_LOG_URL: LOG, STIMMIG_REGISTRAR_URL: REG, STIMMIG_BALLOTBOX_URL: BOX,
-  STIMMIG_LOG_ADMIN_TOKEN: 'la', STIMMIG_REGISTRAR_ADMIN_TOKEN: 'ra', STIMMIG_BALLOTBOX_ADMIN_TOKEN: 'ba',
+  STIMMIG_LOG_ADMIN_TOKEN: 'log-admin-token-0123456789', STIMMIG_REGISTRAR_ADMIN_TOKEN: 'registrar-admin-token-0123456', STIMMIG_BALLOTBOX_ADMIN_TOKEN: 'ballotbox-admin-token-0123456',
 };
 const admin = (...args) => execFileSync(B, ['admin', ...args], { env }).toString().trim();
 const assert = (cond, msg) => { if (!cond) throw new Error('FAILED: ' + msg); console.log('ok: ' + msg); };

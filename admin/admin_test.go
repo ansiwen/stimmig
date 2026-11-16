@@ -13,6 +13,14 @@ func TestParseVotersRefusesWhatCannotLogIn(t *testing.T) {
 	}
 }
 
+func TestParseVotersRefusesBadOIDCLines(t *testing.T) {
+	for _, line := range []string{"oidc: https://idp.example#sub", "oidc:https://idp.example", "oidc:#sub", "oidc:https://idp.example#", "oidc:https://idp.example#a\tb"} {
+		if _, err := ParseVoters(line + "\n"); err == nil || !strings.Contains(err.Error(), "line 1") {
+			t.Errorf("%q: %v", line, err)
+		}
+	}
+}
+
 func TestParseVoters(t *testing.T) {
 	roll, err := ParseVoters(" Ada@Example.org \n\noidc:https://idp.example#User-42\n")
 	if err != nil || len(roll.Voters) != 2 {

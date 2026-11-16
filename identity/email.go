@@ -4,14 +4,17 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"html/template"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/smtp"
+	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
@@ -34,13 +37,60 @@ type SMTPMailer struct {
 	From string
 }
 
-// Send implements Mailer.
-func (m SMTPMailer) Send(_ context.Context, to, subject, body string) error {
+// Send implements Mailer. The deadline of ctx covers the whole conversation
+// with the server. Errors do not carry the server's reply, which often quotes
+// the recipient: the registrar logs them, and the log must not name voters.
+func (m SMTPMailer) Send(ctx context.Context, to, subject, body string) error {
 	if strings.ContainsAny(to+subject, "\r\n") {
 		return errors.New("identity: line break in a mail header")
 	}
 	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\n\r\n%s\r\n", m.From, to, subject, body)
-	return smtp.SendMail(m.Addr, nil, m.From, []string{to}, []byte(msg))
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "tcp", m.Addr)
+	if err != nil {
+		return fmt.Errorf("identity: connecting to the mail server: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if dl, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(dl)
+	}
+	host, _, _ := net.SplitHostPort(m.Addr)
+	c, err := smtp.NewClient(conn, host)
+	if err != nil {
+		return smtpError("greeting", err)
+	}
+	if ok, _ := c.Extension("STARTTLS"); ok {
+		if err := c.StartTLS(&tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}); err != nil {
+			return smtpError("starttls", err)
+		}
+	}
+	if err := c.Mail(m.From); err != nil {
+		return smtpError("sender", err)
+	}
+	if err := c.Rcpt(to); err != nil {
+		return smtpError("recipient", err)
+	}
+	w, err := c.Data()
+	if err != nil {
+		return smtpError("data", err)
+	}
+	if _, err := w.Write([]byte(msg)); err != nil {
+		return smtpError("data", err)
+	}
+	if err := w.Close(); err != nil {
+		return smtpError("data", err)
+	}
+	return c.Quit()
+}
+
+// smtpError names the step and the reply code of a failed mail, without the
+// text of the reply.
+func smtpError(step string, err error) error {
+	var te *textproto.Error
+	if errors.As(err, &te) {
+		return fmt.Errorf("identity: mail server refused the %s: code %d", step, te.Code)
+	}
+	return fmt.Errorf("identity: mail %s: %w", step, err)
 }
 
 // LogMailer writes mails to a writer instead of sending them. It is for

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ansiwen/stimmig/client"
 )
 
 func TestTallyCommand(t *testing.T) {
@@ -118,11 +120,20 @@ func TestAdminWebFailsClosed(t *testing.T) {
 	}
 }
 
+func TestServiceTokensMustBeLong(t *testing.T) {
+	t.Setenv("STIMMIG_DATABASE_URL", "postgres://unused")
+	t.Setenv("STIMMIG_ADMIN_TOKEN", "admin")
+	var out, errOut bytes.Buffer
+	if code := run([]string{"log"}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "at least 16 characters") {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+}
+
 func TestServiceTokensMustDiffer(t *testing.T) {
 	t.Setenv("STIMMIG_DATABASE_URL", "postgres://unused")
-	t.Setenv("STIMMIG_ADMIN_TOKEN", "same")
-	t.Setenv("STIMMIG_REGISTRAR_TOKEN", "same")
-	t.Setenv("STIMMIG_BALLOTBOX_TOKEN", "other")
+	t.Setenv("STIMMIG_ADMIN_TOKEN", strings.Repeat("s", 20))
+	t.Setenv("STIMMIG_REGISTRAR_TOKEN", strings.Repeat("s", 20))
+	t.Setenv("STIMMIG_BALLOTBOX_TOKEN", strings.Repeat("o", 20))
 	var out, errOut bytes.Buffer
 	if code := run([]string{"log"}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "must be different") {
 		t.Fatalf("exit %d: %s", code, errOut.String())
@@ -176,10 +187,10 @@ func TestListenAndServeFinishesRequestsInFlight(t *testing.T) {
 
 func TestServicesNeedTheirKeysAndMail(t *testing.T) {
 	base := map[string]string{
-		"STIMMIG_DATABASE_URL": "postgres://unused", "STIMMIG_ADMIN_TOKEN": "admin",
-		"STIMMIG_LOG_URL": "http://log.example", "STIMMIG_LOG_TOKEN": "t",
+		"STIMMIG_DATABASE_URL": "postgres://unused", "STIMMIG_ADMIN_TOKEN": "admin-token-0123456789",
+		"STIMMIG_LOG_URL": "http://log.example", "STIMMIG_LOG_TOKEN": "log-token-0123456789",
 		"STIMMIG_PUBLIC_URL": "http://registrar.example", "STIMMIG_EMAIL_SECRET": strings.Repeat("s", 32),
-		"STIMMIG_REGISTRAR_TOKEN": "r", "STIMMIG_BALLOTBOX_TOKEN": "b",
+		"STIMMIG_REGISTRAR_TOKEN": "registrar-token-01234", "STIMMIG_BALLOTBOX_TOKEN": "ballotbox-token-01234",
 	}
 	for k, v := range base {
 		t.Setenv(k, v)
@@ -212,5 +223,36 @@ func TestBallotBoxDoesNotLogClientAddresses(t *testing.T) {
 	errorLog("log", &buf).Print("an error")
 	if buf.Len() == 0 {
 		t.Fatal("the other services log nothing")
+	}
+}
+
+func TestStateFileIsReplacedPrivately(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil { //nolint:gosec // the old file is world-readable on purpose
+		t.Fatal(err)
+	}
+	if err := saveState(path, &client.State{CredentialKey: []byte("key")}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("%v, %v", info, err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(path), ".stimmig-state-*")); len(left) != 0 {
+		t.Fatalf("temporary files: %v", left)
+	}
+}
+
+func TestCastNeedsTheRankingFlag(t *testing.T) {
+	var out, errOut bytes.Buffer
+	state := filepath.Join(t.TempDir(), "state.json")
+	for _, args := range [][]string{
+		{"client", "cast", "-state", state},
+		{"client", "cast", "-state", state, "A>B"},
+	} {
+		errOut.Reset()
+		if code := run(args, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "-ranking is required") {
+			t.Errorf("%v: exit %d: %s", args, code, errOut.String())
+		}
 	}
 }

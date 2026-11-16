@@ -123,7 +123,10 @@ func (c *Client) Handler(token string) http.Handler {
 			return nil, err
 		}
 		roll, err := ParseVoters(in.Voters)
-		if err != nil || len(roll.Voters) == 0 {
+		if err != nil {
+			return nil, badRequest{err}
+		}
+		if len(roll.Voters) == 0 {
 			return nil, badRequest{errors.New("the roll needs at least one voter, one per line")}
 		}
 		warning, err := c.Roll(r.Context(), id, roll)

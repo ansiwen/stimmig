@@ -17,6 +17,7 @@ import (
 	"net/mail"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/ansiwen/stimmig/api"
 	"github.com/ansiwen/stimmig/election"
@@ -165,6 +166,11 @@ func ParseVoters(text string) (api.Roll, error) {
 	for n := 1; sc.Scan(); n++ {
 		line := strings.TrimSpace(sc.Text())
 		if subject, ok := strings.CutPrefix(line, "oidc:"); ok {
+			// <issuer>#<sub>, without blanks: a subject that never matches a login
+			// excludes the voter for good.
+			if i := strings.Index(subject, "#"); i < 1 || i == len(subject)-1 || strings.ContainsFunc(subject, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+				return roll, fmt.Errorf("line %d: %q is not oidc:<issuer>#<sub>", n, line)
+			}
 			roll.Voters = append(roll.Voters, api.Voter{Provider: "oidc", Subject: subject})
 		} else if line != "" {
 			// The roll cannot be changed once it is published, and a line such as

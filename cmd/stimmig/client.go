@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -86,6 +87,12 @@ func runClient(args []string, stdout, stderr io.Writer) int {
 			}
 			_, _ = fmt.Fprintf(stdout, "Credential received. Your entry in the public roll is %s.\n", hex.EncodeToString(st.RollReference))
 		case "cast":
+			// A forgotten flag would cast an empty ballot, which is final.
+			given := false
+			fs.Visit(func(f *flag.Flag) { given = given || f.Name == "ranking" })
+			if !given || fs.NArg() != 0 {
+				return errors.New(`-ranking is required, for example -ranking "A>B"; -ranking "" casts an empty ballot`)
+			}
 			if err := readJSON(*statePath, &st); err != nil {
 				return err
 			}
@@ -148,10 +155,29 @@ func runClient(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// saveState replaces the file in one step: a full disk or a kill must leave
+// the old state, which may hold the only copy of the credential key. The
+// file is private, whatever the mode of the one it replaces.
 func saveState(path string, st *client.State) error {
 	data, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".stimmig-state-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }() // after a successful rename it is gone
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }

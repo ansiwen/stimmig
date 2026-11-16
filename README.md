@@ -87,15 +87,16 @@ The services need PostgreSQL. Each service gets its own database:
 
 ```bash
 export STIMMIG_DATABASE_URL=postgres://stimmig:secret@localhost/stimmig_log
-export STIMMIG_LISTEN=127.0.0.1:8081 STIMMIG_ADMIN_TOKEN=log-admin STIMMIG_ALLOW_PLAIN_KEYS=1
-export STIMMIG_REGISTRAR_TOKEN=log-registrar STIMMIG_BALLOTBOX_TOKEN=log-ballotbox
+# The tokens need at least 16 characters; real ones should be generated (openssl rand -hex 32).
+export STIMMIG_LISTEN=127.0.0.1:8081 STIMMIG_ADMIN_TOKEN=log-admin-token-0123456789 STIMMIG_ALLOW_PLAIN_KEYS=1
+export STIMMIG_REGISTRAR_TOKEN=log-registrar-token-0123456 STIMMIG_BALLOTBOX_TOKEN=log-ballotbox-token-0123456
 go run ./cmd/stimmig log
 ```
 
 ```bash
 export STIMMIG_DATABASE_URL=postgres://stimmig:secret@localhost/stimmig_registrar
-export STIMMIG_LISTEN=127.0.0.1:8082 STIMMIG_ADMIN_TOKEN=registrar-admin STIMMIG_ALLOW_PLAIN_KEYS=1 STIMMIG_PRINT_MAILS=1
-export STIMMIG_LOG_URL=http://127.0.0.1:8081 STIMMIG_LOG_TOKEN=log-registrar
+export STIMMIG_LISTEN=127.0.0.1:8082 STIMMIG_ADMIN_TOKEN=registrar-admin-token-0123456 STIMMIG_ALLOW_PLAIN_KEYS=1 STIMMIG_PRINT_MAILS=1
+export STIMMIG_LOG_URL=http://127.0.0.1:8081 STIMMIG_LOG_TOKEN=log-registrar-token-0123456
 export STIMMIG_PUBLIC_URL=http://127.0.0.1:8082
 export STIMMIG_EMAIL_SECRET=change-me-to-32-random-characters
 go run ./cmd/stimmig registrar
@@ -103,8 +104,8 @@ go run ./cmd/stimmig registrar
 
 ```bash
 export STIMMIG_DATABASE_URL=postgres://stimmig:secret@localhost/stimmig_ballotbox
-export STIMMIG_LISTEN=127.0.0.1:8083 STIMMIG_ADMIN_TOKEN=ballotbox-admin STIMMIG_ALLOW_PLAIN_KEYS=1
-export STIMMIG_LOG_URL=http://127.0.0.1:8081 STIMMIG_LOG_TOKEN=log-ballotbox
+export STIMMIG_LISTEN=127.0.0.1:8083 STIMMIG_ADMIN_TOKEN=ballotbox-admin-token-0123456 STIMMIG_ALLOW_PLAIN_KEYS=1
+export STIMMIG_LOG_URL=http://127.0.0.1:8081 STIMMIG_LOG_TOKEN=log-ballotbox-token-0123456
 go run ./cmd/stimmig ballotbox
 ```
 
@@ -115,9 +116,9 @@ not without `STIMMIG_SMTP_ADDR` and `STIMMIG_SMTP_FROM`. For development set
 prints the login mails instead of sending them. The admin drives the election:
 
 ```bash
-export STIMMIG_LOG_URL=http://127.0.0.1:8081 STIMMIG_LOG_ADMIN_TOKEN=log-admin
-export STIMMIG_REGISTRAR_URL=http://127.0.0.1:8082 STIMMIG_REGISTRAR_ADMIN_TOKEN=registrar-admin
-export STIMMIG_BALLOTBOX_URL=http://127.0.0.1:8083 STIMMIG_BALLOTBOX_ADMIN_TOKEN=ballotbox-admin
+export STIMMIG_LOG_URL=http://127.0.0.1:8081 STIMMIG_LOG_ADMIN_TOKEN=log-admin-token-0123456789
+export STIMMIG_REGISTRAR_URL=http://127.0.0.1:8082 STIMMIG_REGISTRAR_ADMIN_TOKEN=registrar-admin-token-0123456
+export STIMMIG_BALLOTBOX_URL=http://127.0.0.1:8083 STIMMIG_BALLOTBOX_ADMIN_TOKEN=ballotbox-admin-token-0123456
 echo '{"title": "Board", "tally": {"candidates": ["A", "B", "C"], "method": "schulze"}}' > election.json
 # Optional: "schedule": {"registration_close": "2027-01-10T18:00:00Z", "voting_open": "2027-01-11T08:00:00Z", "voting_close": "2027-01-12T18:00:00Z"}
 # then the services close, open and tally by themselves; the admin does the roll only.

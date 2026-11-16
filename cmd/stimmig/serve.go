@@ -54,6 +54,9 @@ registrar:
   STIMMIG_OIDC_CLIENT_ID, STIMMIG_OIDC_CLIENT_SECRET  this registrar's client at the issuer;
                            its redirect URL is <STIMMIG_PUBLIC_URL>/v1/callback/oidc`
 
+// minToken is the shortest token of a service or of the admin web page.
+const minToken = 16
+
 // env reads required environment variables.
 type env struct {
 	missing []string
@@ -81,6 +84,13 @@ func serve(ctx context.Context, role string, stderr io.Writer) error {
 	listen := os.Getenv("STIMMIG_LISTEN")
 	if listen == "" {
 		listen = ":8080"
+	}
+	// The services have no limit on failed attempts, and the ingress publishes
+	// their admin and writer endpoints: the tokens must not be guessable.
+	for _, name := range []string{"STIMMIG_ADMIN_TOKEN", "STIMMIG_REGISTRAR_TOKEN", "STIMMIG_BALLOTBOX_TOKEN", "STIMMIG_LOG_TOKEN"} {
+		if v := os.Getenv(name); v != "" && len(v) < minToken {
+			return fmt.Errorf("%s must have at least %d characters; generate it, for example with openssl rand -hex 32", name, minToken)
+		}
 	}
 	keys, err := keystore.Parse(os.Getenv("STIMMIG_KEY_ENCRYPTION_KEY"))
 	if err != nil {
@@ -127,8 +137,8 @@ func serve(ctx context.Context, role string, stderr io.Writer) error {
 		handler = func(db *sql.DB) (http.Handler, error) {
 			s := &registrar.Server{DB: db, Log: log, AdminToken: adminToken, Keys: keys, Secret: []byte(secret)}
 			if v := os.Getenv("STIMMIG_MAIL_INTERVAL"); v != "" {
-				if s.MailInterval, err = time.ParseDuration(v); err != nil {
-					return nil, err
+				if s.MailInterval, err = time.ParseDuration(v); err != nil || s.MailInterval < 0 {
+					return nil, fmt.Errorf("STIMMIG_MAIL_INTERVAL must be a duration of zero or more: %q", v)
 				}
 			}
 			s.Providers = map[string]identity.Provider{"email": &identity.Email{

@@ -46,7 +46,7 @@ func serveAdminWeb(ctx context.Context, stderr io.Writer) error {
 	if len(e.missing) > 0 {
 		return fmt.Errorf("missing environment variables %v\n%s", e.missing, adminWebHelp)
 	}
-	if len(token) < 16 {
+	if len(token) < minToken {
 		return errors.New("STIMMIG_ADMINWEB_TOKEN must have at least 16 characters")
 	}
 	for _, t := range []string{"STIMMIG_LOG_ADMIN_TOKEN", "STIMMIG_REGISTRAR_ADMIN_TOKEN", "STIMMIG_BALLOTBOX_ADMIN_TOKEN"} {

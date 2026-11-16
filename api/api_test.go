@@ -179,3 +179,18 @@ func TestErrorStatus(t *testing.T) {
 		t.Fatal("nil has a status")
 	}
 }
+
+// A redirect is not followed: the token would go where the service says.
+func TestRedirectsAreNotFollowed(t *testing.T) {
+	hit := false
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hit = true }))
+	defer target.Close()
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer redirector.Close()
+	c := &Client{Base: redirector.URL, Token: "secret"}
+	if err := c.Do(context.Background(), "POST", "/x", struct{}{}, nil); !IsStatus(err, http.StatusTemporaryRedirect) || hit {
+		t.Fatalf("%v, target hit: %v", err, hit)
+	}
+}

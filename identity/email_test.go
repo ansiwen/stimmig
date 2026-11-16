@@ -1,9 +1,12 @@
 package identity
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -126,5 +129,68 @@ func TestEmailAnswerDoesNotDependOnTheMail(t *testing.T) {
 	e.Wait()
 	if w.Code != http.StatusOK || w.Body.String() != post("").Body.String() {
 		t.Fatalf("answer %d differs for a failing mailer", w.Code)
+	}
+}
+
+// fakeSMTP answers like a relay that rejects the recipient and quotes it.
+func fakeSMTP(t *testing.T, stall bool) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = conn.Close() }()
+				if stall {
+					time.Sleep(5 * time.Second)
+					return
+				}
+				r := bufio.NewReader(conn)
+				_, _ = fmt.Fprint(conn, "220 relay\r\n")
+				for {
+					line, err := r.ReadString('\n')
+					if err != nil {
+						return
+					}
+					switch {
+					case strings.HasPrefix(line, "EHLO"):
+						_, _ = fmt.Fprint(conn, "250 relay\r\n")
+					case strings.HasPrefix(line, "MAIL"):
+						_, _ = fmt.Fprint(conn, "250 ok\r\n")
+					case strings.HasPrefix(line, "RCPT"):
+						_, _ = fmt.Fprint(conn, "550 5.1.1 <ada@example.org>: Recipient address rejected\r\n")
+					default:
+						_, _ = fmt.Fprint(conn, "221 bye\r\n")
+						return
+					}
+				}
+			}()
+		}
+	}()
+	return ln.Addr().String()
+}
+
+func TestSMTPMailerErrorsDoNotNameTheRecipient(t *testing.T) {
+	m := SMTPMailer{Addr: fakeSMTP(t, false), From: "noreply@example.org"}
+	err := m.Send(context.Background(), "ada@example.org", "s", "b")
+	if err == nil || strings.Contains(err.Error(), "ada") || !strings.Contains(err.Error(), "550") {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestSMTPMailerHonoursTheDeadline(t *testing.T) {
+	m := SMTPMailer{Addr: fakeSMTP(t, true), From: "noreply@example.org"}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if err := m.Send(ctx, "ada@example.org", "s", "b"); err == nil || time.Since(start) > 3*time.Second {
+		t.Fatalf("%v after %v", err, time.Since(start))
 	}
 }

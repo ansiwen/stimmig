@@ -97,7 +97,12 @@ func IsStatus(err error, code int) bool {
 
 // defaultHTTP has a timeout, so that a stuck service cannot hold a database
 // lock of the caller forever.
-var defaultHTTP = &http.Client{Timeout: 2 * time.Minute}
+var defaultHTTP = &http.Client{
+	Timeout: 2 * time.Minute,
+	// A service that answers with a redirect must not make this client send
+	// the request, with its token, to an address of the service's choosing.
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+}
 
 // Detach returns a context for work that must finish once it has started,
 // whether or not the client that asked for it stays connected: a request
