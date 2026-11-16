@@ -22,6 +22,7 @@ spec:
         {{- include "stimmig.labels" $labels | nindent 8 }}
     spec:
       automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ $.Values.terminationGracePeriodSeconds }}
       securityContext:
         runAsNonRoot: true
         seccompProfile:
@@ -77,6 +78,20 @@ spec:
     - name: http
       port: 80
       targetPort: http
+{{- if ge (int (ternary $.Values.autoscaling.minReplicas $.Values.replicas $.Values.autoscaling.enabled)) 2 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "stimmig.labels" $labels | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "stimmig.labels" $labels | nindent 6 }}
+{{- end }}
 {{- if $.Values.autoscaling.enabled }}
 ---
 apiVersion: autoscaling/v2
@@ -101,6 +116,9 @@ spec:
           averageUtilization: {{ $.Values.autoscaling.targetCPUUtilizationPercentage }}
 {{- end }}
 {{- if $cfg.host }}
+{{- if and (not (index $.Values.ingress.tlsSecrets $role)) (not $.Values.ingress.allowInsecure) }}
+{{- fail (printf "roles.%s.host is set, but ingress.tlsSecrets.%s is not; a page served over HTTP would defeat the protocol (ingress.allowInsecure=true is for tests only)" $role $role) }}
+{{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -108,7 +126,8 @@ metadata:
   name: {{ $name }}
   labels:
     {{- include "stimmig.labels" $labels | nindent 4 }}
-  {{- with $.Values.ingress.annotations }}
+  {{- $annotations := merge (deepCopy ($cfg.ingressAnnotations | default dict)) ($.Values.ingress.annotations | default dict) }}
+  {{- with $annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}

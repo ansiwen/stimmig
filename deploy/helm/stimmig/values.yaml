@@ -10,6 +10,7 @@ image:
 # Every role reads its secrets from an existing Secret, whose keys become
 # environment variables:
 #   all:        STIMMIG_DATABASE_URL, STIMMIG_ADMIN_TOKEN, STIMMIG_KEY_ENCRYPTION_KEY
+#               (the services do not start without the last one)
 #   log:        STIMMIG_REGISTRAR_TOKEN, STIMMIG_BALLOTBOX_TOKEN
 #   registrar:  STIMMIG_LOG_TOKEN, STIMMIG_EMAIL_SECRET
 #   ballotbox:  STIMMIG_LOG_TOKEN
@@ -27,12 +28,20 @@ roles:
     env:
       # URL under which voters reach the registrar.
       STIMMIG_PUBLIC_URL: ""
+      # The registrar does not start without an SMTP server.
       STIMMIG_SMTP_ADDR: ""
       STIMMIG_SMTP_FROM: ""
   ballotbox:
     enabled: true
     existingSecret: stimmig-ballotbox
     host: ""
+    # The ballot box must not record client addresses (SPEC.md section 10).
+    # These annotations are for ingress-nginx; with another controller, set the
+    # equivalents: no access log, and a redirect to HTTPS.
+    ingressAnnotations:
+      nginx.ingress.kubernetes.io/enable-access-log: "false"
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+      nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
     env:
       # Public URLs that the voting client uses; both are required, because
       # the image serves the client.
@@ -42,6 +51,10 @@ roles:
 # URL of the log service for registrar and ballot box. Empty means the log
 # of this release.
 logURL: ""
+
+# Longer than the services' shutdown grace of 45 seconds, so that a request in
+# flight, such as an issuance, finishes before the pod is stopped.
+terminationGracePeriodSeconds: 60
 
 replicas: 2
 autoscaling:
@@ -57,11 +70,11 @@ resources:
   limits:
     memory: 1Gi
 
-# The ballot box must not record client addresses (SPEC.md section 10):
-# switch off the access log of the ingress controller for its host.
 ingress:
   className: ""
   annotations: {}
-  # Name of a TLS secret per role, by role name. Without an entry the
-  # Ingress has no TLS section and relies on the controller's default.
+  # Name of a TLS secret per role, by role name. A role with a host needs one:
+  # a page served over HTTP would defeat the protocol.
   tlsSecrets: {}
+  # Only for tests: allow a host without a TLS secret.
+  allowInsecure: false

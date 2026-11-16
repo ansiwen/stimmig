@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -31,7 +32,8 @@ const serveHelp = `environment of the services:
   STIMMIG_LISTEN           listen address, default :8080
   STIMMIG_ADMIN_TOKEN      bearer token of this service's admin API
   STIMMIG_DB_MAX_CONNS     size of the database pool, default 20
-  STIMMIG_KEY_ENCRYPTION_KEY  64 hexadecimal characters; encrypts the private keys in the database
+  STIMMIG_KEY_ENCRYPTION_KEY  64 hexadecimal characters; encrypts the private keys in the database;
+                           required unless STIMMIG_ALLOW_PLAIN_KEYS=1 (development)
 log:
   STIMMIG_REGISTRAR_TOKEN  token with which the registrar appends
   STIMMIG_BALLOTBOX_TOKEN  token with which the ballot box appends
@@ -44,7 +46,7 @@ ballotbox:
 registrar:
   STIMMIG_PUBLIC_URL       URL under which voters reach the registrar
   STIMMIG_EMAIL_SECRET     secret that keys the login links and confirmations, 32 characters or more
-  STIMMIG_SMTP_ADDR        host:port of the SMTP server; without it mails are printed
+  STIMMIG_SMTP_ADDR        host:port of the SMTP server; required unless STIMMIG_PRINT_MAILS=1 (development)
   STIMMIG_SMTP_FROM        sender address of the mails
   STIMMIG_MAIL_INTERVAL    shortest time between two login mails to one address, default 1m
   STIMMIG_OIDC_ISSUER      OpenID Connect issuer URL; adds the provider "oidc"
@@ -83,9 +85,6 @@ func serve(ctx context.Context, role string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if keys == (keystore.Plain{}) {
-		_, _ = fmt.Fprintf(stderr, "stimmig %s: warning: STIMMIG_KEY_ENCRYPTION_KEY is not set; private keys are stored unencrypted\n", role)
-	}
 	var handler func(db *sql.DB) (http.Handler, error)
 	switch role {
 	case "log":
@@ -111,7 +110,11 @@ func serve(ctx context.Context, role string, stderr io.Writer) error {
 		}
 		var mailer identity.Mailer = identity.LogMailer{W: stderr}
 		if os.Getenv("STIMMIG_SMTP_ADDR") == "" {
-			_, _ = fmt.Fprintln(stderr, "stimmig registrar: warning: STIMMIG_SMTP_ADDR is not set; login mails, with the voters' addresses, are printed here")
+			// Login mails hold the voters' addresses and login links.
+			if os.Getenv("STIMMIG_PRINT_MAILS") != "1" {
+				return errors.New("STIMMIG_SMTP_ADDR is not set; set it, or set STIMMIG_PRINT_MAILS=1 for development")
+			}
+			_, _ = fmt.Fprintln(stderr, "stimmig registrar: warning: login mails, with the voters' addresses, are printed here")
 		}
 		if addr := os.Getenv("STIMMIG_SMTP_ADDR"); addr != "" {
 			mailer = identity.SMTPMailer{Addr: addr, From: e.get("STIMMIG_SMTP_FROM")}
@@ -155,6 +158,15 @@ func serve(ctx context.Context, role string, stderr io.Writer) error {
 	if len(e.missing) > 0 {
 		return fmt.Errorf("missing environment variables %v\n%s", e.missing, serveHelp)
 	}
+	// A key that is missing by mistake, for example a misspelt key in a
+	// secret, must not mean that the keys are stored in clear. That includes the
+	// election private key, which opens the ballots.
+	if keys == (keystore.Plain{}) {
+		if os.Getenv("STIMMIG_ALLOW_PLAIN_KEYS") != "1" {
+			return errors.New("STIMMIG_KEY_ENCRYPTION_KEY is not set; set it, or set STIMMIG_ALLOW_PLAIN_KEYS=1 for development")
+		}
+		_, _ = fmt.Fprintf(stderr, "stimmig %s: warning: private keys are stored unencrypted\n", role)
+	}
 	db, err := sql.Open("pgx", dbURL)
 	if err != nil {
 		return err
@@ -173,11 +185,14 @@ func serve(ctx context.Context, role string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	// No access log: the ballot box must not record client addresses, and
-	// the other services do not need to.
+	// There is no access log: the ballot box must not record client
+	// addresses, and the other services do not need to.
 	// The write timeout is long because a tally or an export can take a while.
 	srv := &http.Server{
 		Addr: listen, Handler: h,
+		// net/http logs the address of a client whose handler panicked; the
+		// ballot box must not record one.
+		ErrorLog: errorLog(role, stderr),
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
 		WriteTimeout: 5 * time.Minute, IdleTimeout: 2 * time.Minute,
 	}
@@ -215,4 +230,13 @@ func listenAndServeOn(ctx context.Context, srv *http.Server, ln net.Listener, gr
 		return err
 	}
 	return <-done
+}
+
+// errorLog is the logger of the HTTP server for its own errors. The ballot
+// box discards them, because they can name the address of a client.
+func errorLog(role string, stderr io.Writer) *log.Logger {
+	if role == "ballotbox" {
+		return log.New(io.Discard, "", 0)
+	}
+	return log.New(stderr, "http: ", log.LstdFlags)
 }

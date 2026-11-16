@@ -163,3 +163,41 @@ func TestListenAndServeFinishesRequestsInFlight(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestServicesNeedTheirKeysAndMail(t *testing.T) {
+	base := map[string]string{
+		"STIMMIG_DATABASE_URL": "postgres://unused", "STIMMIG_ADMIN_TOKEN": "admin",
+		"STIMMIG_LOG_URL": "http://log.example", "STIMMIG_LOG_TOKEN": "t",
+		"STIMMIG_PUBLIC_URL": "http://registrar.example", "STIMMIG_EMAIL_SECRET": strings.Repeat("s", 32),
+		"STIMMIG_REGISTRAR_TOKEN": "r", "STIMMIG_BALLOTBOX_TOKEN": "b",
+	}
+	for k, v := range base {
+		t.Setenv(k, v)
+	}
+	var out, errOut bytes.Buffer
+	// Without a key-encryption key no service starts.
+	for _, role := range []string{"log", "registrar", "ballotbox"} {
+		errOut.Reset()
+		if code := run([]string{role}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "STIMMIG_KEY_ENCRYPTION_KEY is not set") {
+			t.Errorf("%s without a key: exit %d: %s", role, code, errOut.String())
+		}
+	}
+	// Without an SMTP server the registrar does not start either.
+	t.Setenv("STIMMIG_KEY_ENCRYPTION_KEY", strings.Repeat("ab", 32))
+	errOut.Reset()
+	if code := run([]string{"registrar"}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "STIMMIG_SMTP_ADDR is not set") {
+		t.Errorf("registrar without SMTP: exit %d: %s", code, errOut.String())
+	}
+}
+
+func TestBallotBoxDoesNotLogClientAddresses(t *testing.T) {
+	var buf bytes.Buffer
+	errorLog("ballotbox", &buf).Print("http: panic serving 203.0.113.9:4711")
+	if buf.Len() != 0 {
+		t.Fatalf("the ballot box logged %q", buf.String())
+	}
+	errorLog("log", &buf).Print("an error")
+	if buf.Len() == 0 {
+		t.Fatal("the other services log nothing")
+	}
+}
