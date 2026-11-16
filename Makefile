@@ -6,6 +6,6 @@ web:
 	mkdir -p web/dist
 	cp web/static/* web/dist/
 	cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" web/dist/
-	GOOS=js GOARCH=wasm go build -trimpath -ldflags="-s -w -buildid=" -o web/dist/stimmig.wasm ./web/wasm
+	GOOS=js GOARCH=wasm go build -trimpath -buildvcs=false -ldflags="-s -w -buildid=" -o web/dist/stimmig.wasm ./web/wasm
 
 .PHONY: web

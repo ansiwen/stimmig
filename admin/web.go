@@ -157,6 +157,7 @@ func (c *Client) Handler(token string) http.Handler {
 		h := w.Header()
 		h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Cross-Origin-Opener-Policy", "same-origin")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("Cache-Control", "no-store")
 		mux.ServeHTTP(w, r)

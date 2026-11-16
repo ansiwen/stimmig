@@ -138,6 +138,13 @@ const assert = (cond, msg) => { if (!cond) throw new Error('FAILED: ' + msg); co
   await page.setInputFiles('#import-file', dir + '/backup.stimmig');
   await page.waitForSelector('#done:not([hidden])');
   assert(true, 'the backup restores credential, ballot and receipt');
+  // Loading a backup over a credential asks first.
+  let asked = '';
+  page.once('dialog', async (d) => { asked = d.message(); await d.dismiss(); });
+  await page.setInputFiles('#import-file', []);
+  await page.setInputFiles('#import-file', dir + '/backup.stimmig');
+  await page.waitForTimeout(500);
+  assert(asked.includes('already holds'), 'a backup does not silently replace what the browser holds');
 
   await page.click('#check');
   await page.waitForSelector('#check-result p', { timeout: 30000 }); // not waitForFunction: the page's content security policy forbids the eval it needs

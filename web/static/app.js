@@ -57,6 +57,8 @@ const T = {
     export: 'Save backup file',
     import: 'Load backup file',
     imported: 'Backup loaded.',
+    otherTab: 'Another tab changed the data of this election. Nothing was saved. Reload the page and continue there.',
+    replace: 'This browser already holds a credential, a ballot or a receipt for this election. Replace it with the backup? This cannot be undone.',
     badPassphrase: 'The passphrase is too short, or it does not open this file.',
   },
   de: {
@@ -112,6 +114,8 @@ const T = {
     export: 'Sicherungsdatei speichern',
     import: 'Sicherungsdatei laden',
     imported: 'Sicherung geladen.',
+    otherTab: 'Ein anderer Tab hat die Daten dieser Wahl geändert. Es wurde nichts gespeichert. Laden Sie die Seite neu und machen Sie dort weiter.',
+    replace: 'Dieser Browser enthält schon ein Credential, einen Stimmzettel oder eine Quittung für diese Wahl. Mit der Sicherung ersetzen? Das lässt sich nicht rückgängig machen.',
     badPassphrase: 'Die Passphrase ist zu kurz, oder sie öffnet diese Datei nicht.',
   },
 };
@@ -143,7 +147,17 @@ let info = null;    // the election
 let ranking = [];   // [{id, tied}] in order; tied: same rank as the one before
 let lastStatus = ['loading'];
 
-function save() { localStorage.setItem(storageKey, JSON.stringify(state)); }
+// lastSaved is what this tab last read or wrote. Another tab that wrote in
+// between would lose its credential or receipt to this tab's older state.
+let lastSaved = null;
+function save() {
+  if (localStorage.getItem(storageKey) !== lastSaved) {
+    showError(t('otherTab'));
+    throw new Error('stale state');
+  }
+  lastSaved = JSON.stringify(state);
+  localStorage.setItem(storageKey, lastSaved);
+}
 function setStatus(key, ...args) { lastStatus = [key, ...args]; $('status').textContent = key ? t(key, ...args) : ''; }
 function showError(err) {
   $('error').hidden = !err;
@@ -379,12 +393,18 @@ async function importBackup(file) {
     const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: buf.slice(16, 28) }, key, buf.slice(28));
     const loaded = JSON.parse(new TextDecoder().decode(plain));
     if (loaded.election_id !== state.election_id) throw new Error();
-    // Only the secrets come from the file. A crafted file must not point the
-    // page at other servers.
-    loaded.log_url = state.log_url;
-    loaded.registrar_url = state.registrar_url;
-    loaded.ballot_box_url = state.ballot_box_url;
-    state = loaded;
+    // Only the credential, the ballot and the receipt come from the file. A
+    // crafted file must not point the page at other servers, nor give it a
+    // registration session of its own (a login link and a confirmation code
+    // that the page would then show as its own).
+    const next = { log_url: state.log_url, registrar_url: state.registrar_url, ballot_box_url: state.ballot_box_url };
+    for (const k of ['election_id', 'credential_key', 'credential_signature', 'roll_reference', 'ballot', 'ballot_ranking', 'receipt']) {
+      if (k in loaded) next[k] = loaded[k];
+    }
+    // A backup that is older than the credential, the ballot or the receipt
+    // in this browser would lose it for good.
+    if ((state.credential_key || state.ballot || state.receipt) && !confirm(t('replace'))) return;
+    state = next;
     save();
     setStatus('imported');
     render();
@@ -420,7 +440,8 @@ async function start() {
   const known = await fetch(location.origin + '/v1/elections/' + id);
   if (!known.ok) { setStatus(''); return showError(t('unknownElection')); }
   const urls = decodeConfig(new Uint8Array(config));
-  state = JSON.parse(localStorage.getItem(storageKey)) || {
+  lastSaved = localStorage.getItem(storageKey);
+  state = JSON.parse(lastSaved) || {
     election_id: btoa(String.fromCharCode(...id.match(/../g).map((h) => parseInt(h, 16)))),
   };
   // The URLs are the ballot box's, on every load: a state that an older page

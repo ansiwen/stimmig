@@ -10,7 +10,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/stimmig ./cmd/stim
 RUN mkdir -p /out/client \
  && cp web/static/* /out/client/ \
  && cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" /out/client/ \
- && GOOS=js GOARCH=wasm go build -trimpath -ldflags="-s -w -buildid=" -o /out/client/stimmig.wasm ./web/wasm
+ && GOOS=js GOARCH=wasm go build -trimpath -buildvcs=false -ldflags="-s -w -buildid=" -o /out/client/stimmig.wasm ./web/wasm
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/stimmig /stimmig

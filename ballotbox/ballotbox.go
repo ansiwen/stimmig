@@ -110,6 +110,10 @@ func (s *Server) Handler() http.Handler {
 					origin(s.LogURL)+" "+origin(s.RegistrarURL)+"; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 			w.Header().Set("X-Content-Type-Options", "nosniff")
 			w.Header().Set("Referrer-Policy", "no-referrer")
+			// A first visit over HTTP could be rewritten by the network; and a page
+			// that opened this one must not keep a handle to it.
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000")
+			w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
 			w.Header().Set("Cache-Control", "no-cache")
 			files.ServeHTTP(w, r)
 		}))
