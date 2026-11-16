@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -81,6 +82,15 @@ func TestManifestValidate(t *testing.T) {
 		"receipt alg":  func(m *Manifest) { m.Algorithms.ReceiptSignature = "" },
 		"receipt key":  func(m *Manifest) { m.ReceiptKey = nil },
 		"client hash":  func(m *Manifest) { m.ClientHash = []byte{1, 2, 3} },
+		// The point (0, 1): signatures under it can be made by anybody.
+		"log key of small order":     func(m *Manifest) { m.LogKey = append([]byte{1}, make([]byte, 31)...) },
+		"receipt key of small order": func(m *Manifest) { m.ReceiptKey = append([]byte{1}, make([]byte, 31)...) },
+		"too many candidates": func(m *Manifest) {
+			m.Tally.Candidates = nil
+			for i := 0; i <= tally.MaxCandidates; i++ {
+				m.Tally.Candidates = append(m.Tally.Candidates, fmt.Sprint("C", i))
+			}
+		},
 		"schedule: voting opens before registration closes": func(m *Manifest) { m.Schedule = &Schedule{RegistrationClose: 200, VotingOpen: 100} },
 		"schedule: voting closes before it opens":           func(m *Manifest) { m.Schedule = &Schedule{VotingOpen: 200, VotingClose: 100} },
 		"schedule: voting closes before registration":       func(m *Manifest) { m.Schedule = &Schedule{RegistrationClose: 300, VotingClose: 100} },

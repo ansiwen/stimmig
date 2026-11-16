@@ -4,7 +4,6 @@
 package publog
 
 import (
-	"crypto/ed25519"
 	"errors"
 	"fmt"
 
@@ -161,8 +160,10 @@ func (m Manifest) Validate() error {
 	if m.Algorithms != DefaultAlgorithms(m.ReceiptMode) {
 		return fmt.Errorf("publog: unknown or misplaced algorithm identifier in %+v", m.Algorithms)
 	}
-	if len(m.LogKey) != ed25519.PublicKeySize {
-		return errors.New("publog: log key has the wrong size")
+	// A key of small order has signatures that anybody can make, and receipts
+	// and tree heads under it would prove nothing.
+	if err := credential.CheckKey(m.LogKey); err != nil {
+		return fmt.Errorf("publog: log key: %w", err)
 	}
 	issuingKey, err := credential.ParseIssuingKey(m.IssuingKey)
 	if err != nil {
@@ -174,9 +175,11 @@ func (m Manifest) Validate() error {
 	if err := ballot.CheckElectionKey(m.ElectionKey); err != nil {
 		return err
 	}
-	if full := m.ReceiptMode == ReceiptFull; full && len(m.ReceiptKey) != ed25519.PublicKeySize {
-		return errors.New("publog: receipt key has the wrong size")
-	} else if !full && len(m.ReceiptKey) != 0 {
+	if full := m.ReceiptMode == ReceiptFull; full {
+		if err := credential.CheckKey(m.ReceiptKey); err != nil {
+			return fmt.Errorf("publog: receipt key: %w", err)
+		}
+	} else if len(m.ReceiptKey) != 0 {
 		return errors.New("publog: receipt key in receipt mode none")
 	}
 	if m.Schedule != nil {

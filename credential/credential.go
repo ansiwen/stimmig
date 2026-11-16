@@ -35,8 +35,12 @@ import (
 // Algorithm is the identifier of the credential scheme in the manifest.
 const Algorithm = "rsabssa-sha384-pss-deterministic-v1"
 
-// MinBits is the smallest accepted size of the issuing key.
-const MinBits = 3072
+// MinBits is the smallest and MaxBits the largest accepted size of the issuing
+// key; the proof of the key and every verification cost time by its size.
+const (
+	MinBits = 3072
+	MaxBits = 8192
+)
 
 const (
 	variant = blindrsa.SHA384PSSDeterministic
@@ -94,6 +98,9 @@ func ParseIssuingKey(der []byte) (*rsa.PublicKey, error) {
 	}
 	if pub.N.BitLen() < MinBits {
 		return nil, fmt.Errorf("credential: issuing key has %d bits, minimum is %d", pub.N.BitLen(), MinBits)
+	}
+	if pub.N.BitLen() > MaxBits {
+		return nil, fmt.Errorf("credential: issuing key has %d bits, maximum is %d", pub.N.BitLen(), MaxBits)
 	}
 	if pub.E != 65537 {
 		return nil, errors.New("credential: issuing key exponent is not 65537")

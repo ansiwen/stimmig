@@ -164,7 +164,7 @@ func TestVerifyRejects(t *testing.T) {
 		"entry added":         {with(8, entryRecord(t, TypeBallot, map[string]int{}), good[8]), "follows 6 entries"},
 		"second manifest":     {with(3, entryRecord(t, TypeManifest, testManifest())), "manifest must be entry 0"},
 		"no manifest":         {with(1, good[3]), "manifest must be entry 0"},
-		"invalid manifest":    {with(1, entryRecord(t, TypeManifest, badManifest)), "log key has the wrong size"},
+		"invalid manifest":    {with(1, entryRecord(t, TypeManifest, badManifest)), "log key: credential: credential key has the wrong size"},
 		"other manifest":      {with(1, entryRecord(t, TypeManifest, otherManifest)), "for another election"},
 		"head before entries": {with(1, good[2], good[1]), "before the manifest"},
 		"head wrong key":      {with(8, sign(otherKey, id, 5, root(5), lastTS)), "signature is invalid"},

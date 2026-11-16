@@ -16,6 +16,7 @@ Version used: ProVerif 2.05.
 | File | What it checks | Result |
 | --- | --- | --- |
 | `privacy.pv` | Ballot privacy against a registrar and a ballot box that work together | Observational equivalence **is true** |
+| `privacy-early-key.pv` | The same, with the election key known to the attacker from the start | **is true** |
 | `privacy-noblind.pv` | The same without blinding (control) | cannot be proved: the attack is found, as it must |
 | `privacy-nobinding.pv` | The same without binding the ciphertext to the credential | **is true**: not a control, see below |
 | `integrity.pv` | Independence of votes; secrecy of the votes until the close | both **true** |
@@ -73,8 +74,15 @@ specification said it answers the ballot-copying attacks on Helios (section
 - Two honest voters and one ballot of the attacker. Results for two voters do
   not by themselves extend to larger electorates; that is a limit of this kind
   of model.
-- The election key stays secret until the close: the operator is trusted not to
-  use it earlier (SPEC.md section 2), so the model does not give it away.
+- `privacy.pv` keeps the election key secret until the close, as the operator is
+  trusted to (SPEC.md section 2). `privacy-early-key.pv` gives it to the attacker
+  from the start, as when the registrar uses it early: privacy holds as well,
+  because ballots do not tell whose they are. `integrity.pv` proves secrecy of
+  the votes only as long as the key is secret.
+- Lengths are not modelled: the symbolic encryption hides the size of its
+  plaintext. The implementation pads every ballot of an election to one size
+  (SPEC.md section 5.6), so the length of a ciphertext does not tell the
+  ranking.
 - Votes are public values. Only who cast which is hidden.
 
 ## What is not checked

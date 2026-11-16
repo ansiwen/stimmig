@@ -209,7 +209,7 @@ func runElection(t *testing.T) *testElection {
 				t.Fatal(err)
 			}
 		} else {
-			v.ballot = rawBallot(t, id, *v, bytes.Repeat([]byte{4}, 100))
+			v.ballot = rawBallot(t, id, *v, bytes.Repeat([]byte{4}, CiphertextSize(e.manifest)))
 		}
 		if err := CheckBallot(e.manifest, id, v.ballot); err != nil {
 			t.Fatal(err)
@@ -355,7 +355,7 @@ func TestCheckBallot(t *testing.T) {
 	// credential holders cannot make the log large; an honest ballot that
 	// ranks every candidate stays far below the limit.
 	padded := rawBallot(t, id, v, make([]byte, 65000))
-	if err := CheckBallot(m, id, padded); err == nil || !strings.Contains(err.Error(), "limit") {
+	if err := CheckBallot(m, id, padded); err == nil || !strings.Contains(err.Error(), "ballots of this election have") {
 		t.Errorf("padded ballot: %v", err)
 	}
 	all := tally.Ballot{}
@@ -363,8 +363,8 @@ func TestCheckBallot(t *testing.T) {
 		all = append(all, []string{c})
 	}
 	full, err := Cast(rand.Reader, m, id, v.key, v.signature, all)
-	if err != nil || len(full.Ciphertext) > maxCiphertext(m)/2 {
-		t.Errorf("a full ballot has %d bytes of %d: %v", len(full.Ciphertext), maxCiphertext(m), err)
+	if err != nil || len(full.Ciphertext) != CiphertextSize(m) || len(b.Ciphertext) != CiphertextSize(m) {
+		t.Errorf("a full ballot has %d bytes, a short one %d, want %d: %v", len(full.Ciphertext), len(b.Ciphertext), CiphertextSize(m), err)
 	}
 }
 

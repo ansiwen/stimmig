@@ -191,6 +191,9 @@ func Tally(m Manifest, ballots []Ballot) (*Result, error) {
 	return e.res, nil
 }
 
+// MaxCandidates is the most candidates of an election.
+const MaxCandidates = 500
+
 // Validate reports whether the manifest is usable for a tally.
 func (m Manifest) Validate() error {
 	_, err := newElection(m)
@@ -201,6 +204,11 @@ func newElection(m Manifest) (*election, error) {
 	n := len(m.Candidates)
 	if n == 0 {
 		return nil, errors.New("tally: no candidates")
+	}
+	// The methods keep matrices of n by n numbers, and everybody who opens a
+	// log, a browser included, builds them from the manifest.
+	if n > MaxCandidates {
+		return nil, fmt.Errorf("tally: %d candidates, the limit is %d", n, MaxCandidates)
 	}
 	idx := make(map[string]int, n)
 	for i, c := range m.Candidates {

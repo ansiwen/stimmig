@@ -1,0 +1,111 @@
+(* Privacy when the election key is known from the start (SPEC.md section 10: the
+   registrar holds it until the tally). The attacker, who is the registrar and
+   may work with the ballot box, gets it at the beginning, so it decrypts every
+   ballot as soon as it sees it. The ballots are still anonymous, because the
+   registrar signed the credentials blindly: privacy.pv with one more line. *)
+(* Ballot privacy of profile A against a registrar and a ballot box that work
+   together (SPEC.md section 2).
+
+   The attacker controls the network, the registrar (it knows the registrar's
+   key and sees and answers every registration), and it sees every ballot.
+   Two honest voters, A and B, register and then cast; in the right-hand
+   process they swap their votes. If the attacker cannot tell the two
+   processes apart, it cannot tell who voted what, although it sees the
+   registrations with the identities and all published ballots.
+
+   What the model assumes, and what it leaves out:
+   - The registration closes before the voting opens (the phases).
+   - The ballots are published in no order (SPEC.md section 5.3), and the
+     order in which the voters cast is not observable: the mixer and the tally
+     release the two honest entries as an unordered pair, by swapping them in
+     the right-hand process. Timing, network addresses and the order of the
+     casts are therefore NOT modelled: they are the residual risks of
+     SPEC.md section 2.
+   - One more ballot may come from the attacker, through the ballot box.
+   - The voters and the ballot box are honest; the registrar is the attacker.
+     A ballot box that works with the registrar sees the same messages as the
+     attacker does here, so the result covers their collusion up to timing.
+   - Votes are public values; only who cast which is hidden. *)
+
+free c: channel.                 (* the network; also the way to the ballot box *)
+free creg: channel.              (* the registration: public, the registrar is the attacker *)
+free cmixA: channel [private].   (* the cast of voter A, to be released in no order *)
+free cmixB: channel [private].   (* the cast of voter B *)
+free cboxA: channel [private].   (* the honest ballots, to the ballot box *)
+free cboxB: channel [private].
+free cstoreA: channel [private]. (* what the ballot box accepted, to the tally *)
+free cstoreB: channel [private].
+free cstoreC: channel [private]. (* the ballot of the attacker *)
+free eid: bitstring.
+free va, vb: bitstring.
+free idA, idB: ident.
+
+let Voter(cmix: channel, id: ident, v: bitstring, pkR: pkey, pkE: pkey) =
+  new cred: skey;
+  new r: rand;
+  new r2: rand;
+  let pubc = pk(cred) in
+  let m = h((tagCred, eid, pubc)) in
+  out(creg, (id, blind(m, r)));
+  in(creg, bs: bitstring);
+  let sg = unblind(bs, r) in
+  if rsacheck(sg, pkR) = m then
+  phase 1;
+  let ct = hpke(v, pkE, (tagInfo, eid, pubc), r2) in
+  let sb = edsign((tagBallot, eid, ct), cred) in
+  out(cmix, (pubc, sg, ct, sb)).
+
+(* The two honest ballots reach the network as an unordered pair: in the
+   right-hand process they come in the other order, so that the position of a
+   ballot says nothing about its voter. Each voter has a channel of its own, so
+   that the order is fixed (ProVerif would otherwise merge the two possible
+   orders and report an attack that cannot happen). *)
+let Mixer() =
+  phase 1;
+  in(cmixA, b1: bitstring);
+  in(cmixB, b2: bitstring);
+  out(c, choice[(b1, b2), (b2, b1)]);
+  out(cboxA, b1);
+  out(cboxB, b2).
+
+(* The ballot box accepts a ballot with a valid credential and a valid
+   signature. It does not refuse a second ballot of a credential here: that
+   is a matter of integrity (integrity.pv), and accepting replays only gives
+   the attacker more to work with. *)
+let BoxIn(chIn: channel, chOut: channel, pkR: pkey) =
+  phase 1;
+  in(chIn, (pubc: pkey, sg: bitstring, ct: bitstring, sb: bitstring));
+  if rsacheck(sg, pkR) = h((tagCred, eid, pubc)) then
+  if edcheck(sb, pubc) = (tagBallot, eid, ct) then
+  out(chOut, (pubc, sg, ct, sb)).
+
+(* At the close, the key is published and every ballot is published with its
+   decryption. The two honest entries are released as an unordered pair. *)
+let Tally(skE: skey) =
+  phase 1;
+  in(cstoreA, (p1: pkey, g1: bitstring, c1: bitstring, s1: bitstring));
+  in(cstoreB, (p2: pkey, g2: bitstring, c2: bitstring, s2: bitstring));
+  in(cstoreC, (p3: pkey, g3: bitstring, c3: bitstring, s3: bitstring));
+  phase 2;
+  out(c, skE);
+  let e1 = (p1, g1, c1, s1, hdec(c1, skE, (tagInfo, eid, p1))) in
+  let e2 = (p2, g2, c2, s2, hdec(c2, skE, (tagInfo, eid, p2))) in
+  let e3 = (p3, g3, c3, s3, hdec(c3, skE, (tagInfo, eid, p3))) in
+  out(c, choice[(e1, e2, e3), (e2, e1, e3)]).
+
+process
+  new skR: skey;
+  new skE: skey;
+  let pkR = pk(skR) in
+  let pkE = pk(skE) in
+  out(c, pkR);
+  out(c, pkE);
+  out(c, skR);
+  out(c, skE);
+  ( Voter(cmixA, idA, choice[va, vb], pkR, pkE)
+  | Voter(cmixB, idB, choice[vb, va], pkR, pkE)
+  | Mixer()
+  | BoxIn(cboxA, cstoreA, pkR)
+  | BoxIn(cboxB, cstoreB, pkR)
+  | BoxIn(c, cstoreC, pkR)
+  | Tally(skE) )

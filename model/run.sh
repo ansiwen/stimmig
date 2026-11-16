@@ -26,6 +26,7 @@ expect() {
 }
 
 expect privacy.pv 'RESULT Observational equivalence is true.'
+expect privacy-early-key.pv 'RESULT Observational equivalence is true.'
 expect privacy-noblind.pv 'RESULT Observational equivalence cannot be proved.'
 expect privacy-nobinding.pv 'RESULT Observational equivalence is true.'
 expect integrity.pv 'RESULT event(Counted(p,vA[])) ==> event(HonestCast(p)) is true.

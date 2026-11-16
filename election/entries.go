@@ -85,7 +85,7 @@ func Cast(random io.Reader, m publog.Manifest, electionID merkle.Hash, credentia
 	if !ok {
 		return Ballot{}, errors.New("election: credential key is not an Ed25519 key")
 	}
-	ct, err := ballot.Seal(random, electionID, m.ElectionKey, pub, ranking)
+	ct, err := ballot.Seal(random, electionID, m.ElectionKey, pub, ranking, PaddedSize(m))
 	if err != nil {
 		return Ballot{}, err
 	}
@@ -113,21 +113,25 @@ func CheckBallot(m publog.Manifest, electionID merkle.Hash, b Ballot) error {
 	return ballot.Verify(b.CredentialKey, electionID, b.Ciphertext, b.Signature)
 }
 
-// maxCiphertext bounds the ciphertext of a ballot of an election. A ballot
-// holds each candidate at most once, so it is a little more than their names
-// (twice, for the encoding); anything longer would only let a voter with a
-// credential make the log large.
-func maxCiphertext(m publog.Manifest) int {
-	n := 256
+// PaddedSize is the size to which the rankings of an election are padded
+// (SPEC.md section 5.6): room for every candidate once, in a group of its own,
+// twice over, and 16 bytes. Every ranking that follows the ballot rules fits.
+func PaddedSize(m publog.Manifest) int {
+	n := 16
 	for _, c := range m.Tally.Candidates {
 		n += 2 * (len(c) + 5)
 	}
 	return n
 }
 
+// CiphertextSize is the size of the ciphertext of every ballot of an election.
+func CiphertextSize(m publog.Manifest) int { return ballot.CiphertextSize(PaddedSize(m)) }
+
+// checkSize refuses a ciphertext of another size: the length of a ballot must
+// not tell its ranking, and a padded ballot would only make the log large.
 func checkSize(m publog.Manifest, b Ballot) error {
-	if len(b.Ciphertext) > maxCiphertext(m) {
-		return fmt.Errorf("election: ciphertext of %d bytes, the limit of this election is %d", len(b.Ciphertext), maxCiphertext(m))
+	if len(b.Ciphertext) != CiphertextSize(m) {
+		return fmt.Errorf("election: ciphertext of %d bytes, ballots of this election have %d", len(b.Ciphertext), CiphertextSize(m))
 	}
 	return nil
 }

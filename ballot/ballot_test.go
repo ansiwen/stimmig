@@ -38,7 +38,7 @@ func TestSealOpen(t *testing.T) {
 		{},
 		nil,
 	} {
-		ct, err := Seal(rand.Reader, id, pub, cred, ranking)
+		ct, err := Seal(rand.Reader, id, pub, cred, ranking, 64)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -54,7 +54,7 @@ func TestSealOpen(t *testing.T) {
 			t.Errorf("got %v, want %v", got, want)
 		}
 		// Encryption is randomised.
-		again, _ := Seal(rand.Reader, id, pub, cred, ranking)
+		again, _ := Seal(rand.Reader, id, pub, cred, ranking, 64)
 		if bytes.Equal(ct, again) {
 			t.Error("two ciphertexts of the same ranking are equal")
 		}
@@ -64,7 +64,7 @@ func TestSealOpen(t *testing.T) {
 func TestOpenRejects(t *testing.T) {
 	pub, priv := keys(t)
 	_, otherPriv := keys(t)
-	ct, err := Seal(rand.Reader, id, pub, cred, tally.Ballot{{"A"}})
+	ct, err := Seal(rand.Reader, id, pub, cred, tally.Ballot{{"A"}}, 64)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestOpenRejects(t *testing.T) {
 	if _, err := Open(id, priv, cred[:31], ct); !errors.Is(err, ErrDecrypt) {
 		t.Errorf("short credential key: got %v, want ErrDecrypt", err)
 	}
-	if _, err := Seal(rand.Reader, id, pub, cred[:31], tally.Ballot{}); err == nil {
+	if _, err := Seal(rand.Reader, id, pub, cred[:31], tally.Ballot{}, 64); err == nil {
 		t.Error("sealed for a short credential key")
 	}
 	cases := map[string]struct {
@@ -188,7 +188,7 @@ func TestElectionKey(t *testing.T) {
 		if CheckElectionKey(bad) == nil {
 			t.Errorf("%s: accepted", name)
 		}
-		if _, err := Seal(rand.Reader, id, bad, cred, tally.Ballot{}); err == nil {
+		if _, err := Seal(rand.Reader, id, bad, cred, tally.Ballot{}, 64); err == nil {
 			t.Errorf("%s: sealed", name)
 		}
 	}
@@ -242,5 +242,39 @@ func TestReceipt(t *testing.T) {
 	// separate them even with the same key and the same 32 bytes.
 	if Verify(pub, id, leaf[:], receipt) == nil {
 		t.Error("receipt verifies as ballot signature")
+	}
+}
+
+// Every ballot of an election has the same size, and the padding is zero.
+func TestPaddingHidesTheRanking(t *testing.T) {
+	pub, priv := keys(t)
+	var size int
+	for _, ranking := range []tally.Ballot{{}, {{"A"}}, {{"A"}, {"B", "C"}}} {
+		ct, err := Seal(rand.Reader, id, pub, cred, ranking, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if size != 0 && len(ct) != size || len(ct) != CiphertextSize(64) {
+			t.Fatalf("%d bytes, want %d", len(ct), CiphertextSize(64))
+		}
+		size = len(ct)
+	}
+	if _, err := Seal(rand.Reader, id, pub, cred, tally.Ballot{{string(make([]byte, 100))}}, 64); err == nil {
+		t.Error("a ranking longer than the padding was sealed")
+	}
+	enc, _ := canon.Marshal(tally.Ballot{{"A"}})
+	for name, plain := range map[string][]byte{
+		"padding that is not zero": append(append([]byte{0, 0, 0, byte(len(enc))}, enc...), 0, 7),
+		"length beyond the data":   append([]byte{0, 0, 0, 99}, enc...),
+		"no length":                {1, 2},
+		"huge length":              append([]byte{0xff, 0xff, 0xff, 0xff}, enc...),
+	} {
+		if _, err := Open(id, priv, cred, sealRaw(t, pub, plain)); !errors.Is(err, ErrMalformed) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	ok := append(append([]byte{0, 0, 0, byte(len(enc))}, enc...), 0, 0, 0)
+	if got, err := Open(id, priv, cred, sealRaw(t, pub, ok)); err != nil || len(got) != 1 {
+		t.Errorf("zero padding: %v, %v", got, err)
 	}
 }

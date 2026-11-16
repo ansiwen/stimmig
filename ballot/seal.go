@@ -5,7 +5,9 @@
 package ballot
 
 import (
+	"bytes"
 	"crypto/ed25519"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -98,12 +100,22 @@ func sealInfo(electionID merkle.Hash, credentialKey []byte) ([]byte, error) {
 	return canon.Marshal([]any{sealContext, electionID[:], credentialKey})
 }
 
+// lengthSize is the size of the length that starts a plaintext.
+const lengthSize = 4
+
+// CiphertextSize is the size of every ciphertext of ballots that are padded
+// to padTo bytes: the encapsulated key, the length, the padded ranking and the
+// authentication tag of AES-GCM.
+func CiphertextSize(padTo int) int { return encSize + lengthSize + padTo + 16 }
+
 // Seal encrypts a ranking to the election key for the ballot of one
 // credential. The ciphertext is the HPKE encapsulated key followed by the
-// AEAD ciphertext of the canonically encoded ranking. The HPKE info is the
-// canonical encoding of ["stimmig-ballot-encryption-v1", election_id,
-// credential_public_key].
-func Seal(random io.Reader, electionID merkle.Hash, electionKey []byte, credentialKey ed25519.PublicKey, ranking tally.Ballot) ([]byte, error) {
+// AEAD ciphertext of the plaintext: the length n of the canonically encoded
+// ranking as 4 bytes big-endian, the ranking, and zero bytes up to padTo bytes
+// after the length. Every ballot of an election has the same size, so that its
+// length does not tell the ranking. The HPKE info is the canonical encoding
+// of ["stimmig-ballot-encryption-v1", election_id, credential_public_key].
+func Seal(random io.Reader, electionID merkle.Hash, electionKey []byte, credentialKey ed25519.PublicKey, ranking tally.Ballot, padTo int) ([]byte, error) {
 	pk, err := parsePublic(electionKey)
 	if err != nil {
 		return nil, err
@@ -111,10 +123,16 @@ func Seal(random io.Reader, electionID merkle.Hash, electionKey []byte, credenti
 	if ranking == nil {
 		ranking = tally.Ballot{} // an empty ballot is an empty array, not null
 	}
-	plain, err := canon.Marshal(ranking)
+	encoded, err := canon.Marshal(ranking)
 	if err != nil {
 		return nil, err
 	}
+	if len(encoded) > padTo {
+		return nil, errors.New("ballot: the ranking is longer than a ballot of this election can be")
+	}
+	plain := make([]byte, lengthSize+padTo)
+	binary.BigEndian.PutUint32(plain, uint32(len(encoded))) //nolint:gosec // at most padTo
+	copy(plain[lengthSize:], encoded)
 	info, err := sealInfo(electionID, credentialKey)
 	if err != nil {
 		return nil, err
@@ -161,6 +179,14 @@ func Open(electionID merkle.Hash, private []byte, credentialKey ed25519.PublicKe
 	if err != nil {
 		return nil, ErrDecrypt
 	}
+	if len(plain) < lengthSize {
+		return nil, ErrMalformed
+	}
+	n := binary.BigEndian.Uint32(plain)
+	if uint64(n) > uint64(len(plain)-lengthSize) || bytes.Count(plain[lengthSize+int(n):], []byte{0}) != len(plain)-lengthSize-int(n) { //nolint:gosec // n is checked
+		return nil, ErrMalformed // a length beyond the plaintext, or padding that is not zero
+	}
+	plain = plain[lengthSize : lengthSize+int(n)] //nolint:gosec // n is checked
 	ranking := tally.Ballot{}
 	// Strict: a null inside a rank group would decode to the empty name.
 	if err := canon.UnmarshalStrict(plain, &ranking); err != nil || ranking == nil {
