@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ansiwen/stimmig/api"
 	"github.com/ansiwen/stimmig/canon"
@@ -28,6 +31,19 @@ func entry(t *testing.T, typ string, body any) canon.Raw {
 		t.Fatal(err)
 	}
 	return data
+}
+
+func TestDatabaseErrorsAreNotShown(t *testing.T) {
+	w := httptest.NewRecorder()
+	fail(w, fmt.Errorf("query: %w", &pgconn.PgError{Message: "password for user stimmig failed"}))
+	if w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "stimmig") {
+		t.Fatalf("%d %q", w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	fail(w, publog.ErrNotFound)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("%d", w.Code)
+	}
 }
 
 func TestLogService(t *testing.T) {
@@ -158,6 +174,10 @@ func TestLogService(t *testing.T) {
 		if err := registrar.Do(ctx, "POST", path+"/entries", api.Append{Entries: []canon.Raw{bad}, ExpectSize: &two}, nil); !api.IsStatus(err, http.StatusUnprocessableEntity) {
 			t.Fatalf("%s: %v", name, err)
 		}
+	}
+	// An append without entries is refused and signs nothing.
+	if err := registrar.Do(ctx, "POST", path+"/entries", api.Append{Entries: []canon.Raw{}, ExpectSize: &two}, nil); !api.IsStatus(err, http.StatusBadRequest) {
+		t.Fatalf("append without entries: %v", err)
 	}
 	// A batch is checked as a whole: the second entry reuses the voter.
 	if err := registrar.Do(ctx, "POST", path+"/entries", api.Append{Entries: []canon.Raw{issuance(refs[0], 0), issuance(refs[0], 1)}, ExpectSize: &two}, nil); !api.IsStatus(err, http.StatusUnprocessableEntity) {

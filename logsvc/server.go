@@ -2,11 +2,16 @@ package logsvc
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"sync"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ansiwen/stimmig/api"
 	"github.com/ansiwen/stimmig/canon"
@@ -60,8 +65,23 @@ func (s *Server) Handler() http.Handler {
 	return api.CORS(mux)
 }
 
-// fail maps an error to a response.
+// internal reports whether an error comes from the database or the network,
+// not from the request.
+func internal(err error) bool {
+	var pg *pgconn.PgError
+	var conn *pgconn.ConnectError
+	var net net.Error
+	return errors.As(err, &pg) || errors.As(err, &conn) || errors.As(err, &net) ||
+		errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(err, sql.ErrConnDone)
+}
+
+// fail maps an error to a response. Database errors are not shown: they can
+// name hosts and users, and they are not the caller's mistake.
 func fail(w http.ResponseWriter, err error) {
+	if internal(err) {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	code := http.StatusBadRequest
 	switch {
 	case errors.Is(err, publog.ErrNotFound):
@@ -157,6 +177,10 @@ func (s *Server) appendEntries(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	if len(req.Entries) == 0 {
+		http.Error(w, "no entries", http.StatusBadRequest)
+		return
+	}
 	records := make([]publog.Record, len(req.Entries))
 	bodies := make([][]byte, len(req.Entries))
 	for i, e := range req.Entries {
@@ -234,6 +258,7 @@ func (s *Server) appendEntries(w http.ResponseWriter, r *http.Request) {
 	}
 	signer, err := s.Store.Signer(r.Context(), id)
 	if err != nil {
+		delete(s.checkers, id) // it has seen entries that the log does not have
 		fail(w, err)
 		return
 	}
