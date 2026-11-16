@@ -7,6 +7,7 @@ import (
 	"errors"
 
 	"github.com/ansiwen/stimmig/canon"
+	"github.com/ansiwen/stimmig/credential"
 	"github.com/ansiwen/stimmig/merkle"
 )
 
@@ -29,10 +30,12 @@ func Sign(credentialKey ed25519.PrivateKey, electionID merkle.Hash, ciphertext [
 	return ed25519.Sign(credentialKey, msg), nil
 }
 
-// Verify checks the ballot signature against the credential public key.
+// Verify checks the ballot signature against the credential public key,
+// which must pass credential.CheckKey. The signature rule is that of Go's
+// crypto/ed25519 for valid keys: RFC 8032 without the cofactor.
 func Verify(credentialKey ed25519.PublicKey, electionID merkle.Hash, ciphertext, signature []byte) error {
-	if len(credentialKey) != ed25519.PublicKeySize {
-		return errors.New("ballot: credential key has the wrong size")
+	if err := credential.CheckKey(credentialKey); err != nil {
+		return err
 	}
 	msg, err := canon.Marshal([]any{ballotContext, electionID[:], ciphertext})
 	if err != nil {

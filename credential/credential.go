@@ -25,6 +25,7 @@ import (
 	"io"
 	"math/big"
 
+	"filippo.io/edwards25519"
 	"github.com/cloudflare/circl/blindsign/blindrsa"
 
 	"github.com/ansiwen/stimmig/canon"
@@ -46,8 +47,8 @@ const (
 // canonical encoding of ["stimmig-credential-v1", election_id,
 // credential_public_key]. It binds the credential to one election.
 func Message(electionID merkle.Hash, credentialKey ed25519.PublicKey) ([]byte, error) {
-	if len(credentialKey) != ed25519.PublicKeySize {
-		return nil, errors.New("credential: credential key has the wrong size")
+	if err := CheckKey(credentialKey); err != nil {
+		return nil, err
 	}
 	return canon.Marshal([]any{context, electionID[:], []byte(credentialKey)})
 }
@@ -193,8 +194,12 @@ func Verify(issuingKey *rsa.PublicKey, electionID merkle.Hash, credentialKey ed2
 	return nil
 }
 
-// ProofRoots is the number of values in an issuing key proof.
-const ProofRoots = 4
+// ProofRoots is the number of values in an issuing key proof. A key whose
+// group order is divisible by e passes each with probability 1/e, so the
+// registrar that chose the modulus would need about e^ProofRoots tries to
+// find one that passes: 2^128 with 8 values (2^64 with 4 was within reach
+// of a funded attacker, since a try costs one hash).
+const ProofRoots = 8
 
 // proofChallenge derives the i-th value of an issuing key proof from the
 // public key alone, by SHA-256 in counter mode, so that the registrar
@@ -245,6 +250,26 @@ func VerifyIssuingKeyProof(pub *rsa.PublicKey, proof [][]byte) error {
 			new(big.Int).Exp(root, e, pub.N).Cmp(proofChallenge(pub, i)) != 0 {
 			return errors.New("credential: the issuing key proof is invalid")
 		}
+	}
+	return nil
+}
+
+// CheckKey checks a credential public key: it must be a canonical encoding
+// of a point on the curve that does not have a small order. The registrar
+// signs credentials blindly, so a voter can get a signature on any 32
+// bytes. With a key of small order, Ed25519 signatures can be made by
+// anyone, and implementations of Ed25519 disagree on them, which would
+// make the verdict on a log depend on the verifier.
+func CheckKey(key []byte) error {
+	if len(key) != ed25519.PublicKeySize {
+		return errors.New("credential: credential key has the wrong size")
+	}
+	p, err := new(edwards25519.Point).SetBytes(key)
+	if err != nil || !bytes.Equal(p.Bytes(), key) {
+		return errors.New("credential: credential key is not a canonical point")
+	}
+	if new(edwards25519.Point).MultByCofactor(p).Equal(edwards25519.NewIdentityPoint()) == 1 {
+		return errors.New("credential: credential key has a small order")
 	}
 	return nil
 }

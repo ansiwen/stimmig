@@ -3,6 +3,7 @@ module github.com/ansiwen/stimmig
 go 1.25.0
 
 require (
+	filippo.io/edwards25519 v1.2.0
 	github.com/cloudflare/circl v1.6.5
 	github.com/coreos/go-oidc/v3 v3.17.0
 	github.com/fxamacker/cbor/v2 v2.10.0

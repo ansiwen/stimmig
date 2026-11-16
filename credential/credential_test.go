@@ -6,9 +6,12 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/sha512"
 	"crypto/x509"
+	"encoding/hex"
 	"math/big"
+	"os"
 	"sync"
 	"testing"
 
@@ -275,3 +278,60 @@ func TestIssuingKeyProofFailsWhenEDividesTheOrder(t *testing.T) {
 		t.Fatalf("%d of 2000 values have roots", rootable)
 	}
 }
+
+func TestCheckKey(t *testing.T) {
+	good, _, _ := ed25519.GenerateKey(rand.Reader)
+	if err := CheckKey(good); err != nil {
+		t.Fatal(err)
+	}
+	le := func(b ...byte) []byte { return append(b, make([]byte, 32-len(b))...) }
+	allFF := func(first, last byte) []byte {
+		k := bytes.Repeat([]byte{0xff}, 32)
+		k[0], k[31] = first, last
+		return k
+	}
+	bad := map[string][]byte{
+		"identity":                     le(1),
+		"order 2 (0, -1)":              allFF(0xec, 0x7f),
+		"order 4 (x=±sqrt(-1), y=0)":   le(0),
+		"not canonical identity (p+1)": allFF(0xee, 0x7f),
+		"not canonical zero (p)":       allFF(0xed, 0x7f),
+		"short":                        good[:31],
+		"not on the curve":             bytes.Repeat([]byte{2}, 32),
+	}
+	for name, key := range bad {
+		if CheckKey(key) == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	// Message refuses them, so a client cannot ask for such a credential.
+	if _, err := Message(merkle.Hash{}, le(1)); err == nil {
+		t.Error("message for the identity key")
+	}
+}
+
+// The blinded value for a stored seed must not change when the blind RSA
+// library changes: a client that stored a seed and a pending registration
+// rebuilds the request from it. If this test fails after an upgrade of
+// circl, resumable registrations of the old version cannot be finished.
+func TestRequestFromSeedGolden(t *testing.T) {
+	der, err := os.ReadFile("testdata/issuing-key.der")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sk, err := x509.ParsePKCS1PrivateKey(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cred := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, 32)).Public().(ed25519.PublicKey)
+	req, err := NewRequestFromSeed(bytes.Repeat([]byte{0x42}, SeedSize), &sk.PublicKey, merkle.LeafHash([]byte("golden")), cred)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(req.Blinded)
+	if got := hex.EncodeToString(sum[:]); got != goldenBlindedHash {
+		t.Fatalf("blinded value hash %s, want %s", got, goldenBlindedHash)
+	}
+}
+
+const goldenBlindedHash = "56b12f5e1e89eac3ffb134f981df8aac0312a3a88971579c488efe35ee4a7d18"
