@@ -192,6 +192,9 @@ func (v *verifier) entry(id merkle.Hash, m *publog.Manifest, leaf merkle.Hash, i
 		if err := canon.UnmarshalStrict(body, &b); err != nil {
 			return err
 		}
+		if err := checkSize(*m, b); err != nil {
+			return err
+		}
 		if err := credential.Verify(v.issuingKey, id, b.CredentialKey, b.CredentialSignature); err != nil {
 			return err
 		}

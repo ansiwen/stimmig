@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ansiwen/stimmig/api"
 	"github.com/ansiwen/stimmig/ballot"
@@ -297,6 +298,100 @@ func TestCloseAfterPublish(t *testing.T) {
 	rep, err := election.Verify(bytes.NewReader(export), nil)
 	if err != nil || rep.Phase != election.PhaseVotingClosed || rep.Log.Entries != 4 {
 		t.Fatalf("log: %+v, %v", rep, err)
+	}
+
+	// A log that was closed with other ballots than the box holds is not a
+	// published election: the close fails and the phase stays.
+	if _, err := db.ExecContext(ctx, `UPDATE box_elections SET phase = $1`, PhaseClosed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO box_ballots VALUES ($1, $2, $3)`, id[:], []byte("credential"), []byte("ballot")); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.Do(ctx, "POST", path+"/close", nil, nil); err == nil {
+		t.Fatal("close accepted a log with other ballots than the box holds")
+	}
+	var phase string
+	if err := db.QueryRowContext(ctx, `SELECT phase FROM box_elections`).Scan(&phase); err != nil || phase != PhaseClosed {
+		t.Fatalf("phase %q, %v", phase, err)
+	}
+}
+
+// A scheduled close that failed after the phase changed is tried again.
+func TestScheduledCloseIsRetried(t *testing.T) {
+	db := testdb.Open(t)
+	store, err := logsvc.NewStore(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logSrv := httptest.NewServer((&logsvc.Server{Store: store, AdminToken: "la", RegistrarToken: "lr", BallotBoxToken: "lb"}).Handler())
+	defer logSrv.Close()
+	// The log is out of reach at first.
+	down := true
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if down {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		req, _ := http.NewRequestWithContext(r.Context(), r.Method, logSrv.URL+r.URL.RequestURI(), r.Body)
+		req.Header = r.Header
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+	}))
+	defer proxy.Close()
+	srv := &Server{DB: db, Log: &api.Client{Base: proxy.URL, Token: "lb"}, AdminToken: "ba"}
+	if err := srv.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	boxSrv := httptest.NewServer(srv.Handler())
+	defer boxSrv.Close()
+	admin := &api.Client{Base: boxSrv.URL, Token: "ba"}
+	logAdmin, registrar := &api.Client{Base: logSrv.URL, Token: "la"}, &api.Client{Base: logSrv.URL, Token: "lr"}
+	var logKey api.LogKey
+	var boxKey api.BallotBoxKey
+	if err := logAdmin.Do(ctx, "POST", "/v1/keys", nil, &logKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.Do(ctx, "POST", "/v1/keys", nil, &boxKey); err != nil {
+		t.Fatal(err)
+	}
+	closeAt := time.Date(2027, 1, 1, 12, 0, 0, 0, time.UTC)
+	m := testkit.Manifest(logKey.LogKey, testkit.SharedKeys())
+	m.ReceiptKey = boxKey.ReceiptKey
+	m.Schedule = &publog.Schedule{VotingClose: uint64(closeAt.Unix())}
+	var created api.Created
+	if err := logAdmin.Do(ctx, "POST", "/v1/elections", m, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.Do(ctx, "POST", "/v1/elections", m, &created); err != nil {
+		t.Fatal(err)
+	}
+	id := merkle.Hash(created.ElectionID)
+	roll, _ := election.RollRecord(nil)
+	if _, err := api.AppendRecords(ctx, registrar, id, 1, []publog.Record{roll, {Type: publog.TypeRegistrationClose, Body: election.RegistrationClose{}}}); err != nil {
+		t.Fatal(err)
+	}
+	down = false
+	if err := admin.Do(ctx, "POST", api.ElectionPath(id)+"/open", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	down = true
+	if err := srv.RunDue(ctx, closeAt); err == nil {
+		t.Fatal("close without a log reported no error")
+	}
+	down = false
+	if err := srv.RunDue(ctx, closeAt.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	export, _ := api.Export(ctx, registrar, id)
+	if rep, err := election.Verify(bytes.NewReader(export), nil); err != nil || rep.Phase != election.PhaseVotingClosed {
+		t.Fatalf("log after the retry: %+v, %v", rep, err)
 	}
 }
 

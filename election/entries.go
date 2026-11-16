@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"fmt"
 	"io"
 	"sort"
 
@@ -99,6 +100,9 @@ func Cast(random io.Reader, m publog.Manifest, electionID merkle.Hash, credentia
 // credential's signature on the ciphertext. The ballot box calls it before
 // it stores a ballot; it must also check that the credential has not voted.
 func CheckBallot(m publog.Manifest, electionID merkle.Hash, b Ballot) error {
+	if err := checkSize(m, b); err != nil {
+		return err
+	}
 	issuingKey, err := credential.ParseIssuingKey(m.IssuingKey)
 	if err != nil {
 		return err
@@ -107,6 +111,25 @@ func CheckBallot(m publog.Manifest, electionID merkle.Hash, b Ballot) error {
 		return err
 	}
 	return ballot.Verify(b.CredentialKey, electionID, b.Ciphertext, b.Signature)
+}
+
+// maxCiphertext bounds the ciphertext of a ballot of an election. A ballot
+// holds each candidate at most once, so it is a little more than their names
+// (twice, for the encoding); anything longer would only let a voter with a
+// credential make the log large.
+func maxCiphertext(m publog.Manifest) int {
+	n := 256
+	for _, c := range m.Tally.Candidates {
+		n += 2 * (len(c) + 5)
+	}
+	return n
+}
+
+func checkSize(m publog.Manifest, b Ballot) error {
+	if len(b.Ciphertext) > maxCiphertext(m) {
+		return fmt.Errorf("election: ciphertext of %d bytes, the limit of this election is %d", len(b.Ciphertext), maxCiphertext(m))
+	}
+	return nil
 }
 
 // BallotLeaf returns the leaf hash that the ballot will have in the log.

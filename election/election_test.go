@@ -351,6 +351,21 @@ func TestCheckBallot(t *testing.T) {
 	if CheckBallot(m, merkle.LeafHash([]byte("other")), b) == nil {
 		t.Error("ballot accepted for another election")
 	}
+	// A correctly signed ballot with a padded ciphertext is refused, so that
+	// credential holders cannot make the log large; an honest ballot that
+	// ranks every candidate stays far below the limit.
+	padded := rawBallot(t, id, v, make([]byte, 65000))
+	if err := CheckBallot(m, id, padded); err == nil || !strings.Contains(err.Error(), "limit") {
+		t.Errorf("padded ballot: %v", err)
+	}
+	all := tally.Ballot{}
+	for _, c := range m.Tally.Candidates {
+		all = append(all, []string{c})
+	}
+	full, err := Cast(rand.Reader, m, id, v.key, v.signature, all)
+	if err != nil || len(full.Ciphertext) > maxCiphertext(m)/2 {
+		t.Errorf("a full ballot has %d bytes of %d: %v", len(full.Ciphertext), maxCiphertext(m), err)
+	}
 }
 
 // rec is one log entry of a rebuilt log.

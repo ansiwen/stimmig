@@ -290,6 +290,17 @@ func (s *Server) closeVoting(ctx context.Context, id merkle.Hash) error {
 		if _, err := api.AppendRecords(ctx, s.Log, id, rep.Log.Entries, records); err != nil {
 			return fmt.Errorf("log: %w", err)
 		}
+		return s.setPhase(ctx, id, PhasePublished, PhaseClosed)
+	}
+	// The log is past the voting: an earlier close published the ballots. It
+	// must be the ballots that this box holds; a log that was closed by
+	// somebody else, with other ballots, is not a published election.
+	var stored uint64
+	if err := s.DB.QueryRowContext(ctx, `SELECT count(*) FROM box_ballots WHERE election = $1`, id[:]).Scan(&stored); err != nil {
+		return err
+	}
+	if rep.Phase == election.PhaseRegistration || rep.Phase == election.PhaseSetup || rep.Cast != stored {
+		return fmt.Errorf("the log is in phase %q with %d ballots, the ballot box holds %d", rep.Phase, rep.Cast, stored)
 	}
 	return s.setPhase(ctx, id, PhasePublished, PhaseClosed)
 }
@@ -445,7 +456,7 @@ func origin(raw string) string {
 // that another one did already or that cannot be done yet is skipped. It
 // returns the first error of the others.
 func (s *Server) RunDue(ctx context.Context, now time.Time) (err error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT id, manifest, phase FROM box_elections WHERE phase IN ($1, $2)`, PhaseSetup, PhaseOpen)
+	rows, err := s.DB.QueryContext(ctx, `SELECT id, manifest, phase FROM box_elections WHERE phase IN ($1, $2, $3)`, PhaseSetup, PhaseOpen, PhaseClosed)
 	if err != nil {
 		return err
 	}
@@ -482,7 +493,9 @@ func (s *Server) RunDue(ctx context.Context, now time.Time) (err error) {
 		switch {
 		case d.phase == PhaseSetup && d.schedule.VotingOpen != 0 && at >= d.schedule.VotingOpen:
 			step = s.openVoting(ctx, d.id)
-		case d.phase == PhaseOpen && d.schedule.VotingClose != 0 && at >= d.schedule.VotingClose:
+		// A close that failed after the phase changed (the log was out of reach)
+		// is tried again.
+		case (d.phase == PhaseOpen || d.phase == PhaseClosed) && d.schedule.VotingClose != 0 && at >= d.schedule.VotingClose:
 			step = s.closeVoting(ctx, d.id)
 		}
 		// A conflict means that somebody did the step, or that it cannot be
