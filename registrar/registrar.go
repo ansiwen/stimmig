@@ -35,6 +35,7 @@ import (
 	"github.com/ansiwen/stimmig/keystore"
 	"github.com/ansiwen/stimmig/merkle"
 	"github.com/ansiwen/stimmig/publog"
+	"github.com/ansiwen/stimmig/tally"
 )
 
 //go:embed schema.sql
@@ -42,6 +43,9 @@ var schema string
 
 //go:embed schema_mail.sql
 var schemaMail string
+
+//go:embed schema_tallied.sql
+var schemaTallied string
 
 // SessionValidity is how long a voter has to log in.
 const SessionValidity = time.Hour
@@ -89,7 +93,7 @@ func (s *Server) sealer() keystore.Sealer {
 
 // Init creates the tables if they are missing.
 func (s *Server) Init(ctx context.Context) error {
-	return api.Migrate(ctx, s.DB, "registrar", []string{schema, schemaMail})
+	return api.Migrate(ctx, s.DB, "registrar", []string{schema, schemaMail, schemaTallied})
 }
 
 // Handler returns the routes of the service.
@@ -299,7 +303,12 @@ func (s *Server) close(_ http.ResponseWriter, r *http.Request) (any, error) {
 	}
 	ctx, cancel := api.Detach(r)
 	defer cancel()
-	return nil, api.InTx(ctx, s.DB, func(tx *sql.Tx) error {
+	return nil, s.closeRegistration(ctx, id)
+}
+
+// closeRegistration closes the registration of an election.
+func (s *Server) closeRegistration(ctx context.Context, id merkle.Hash) error {
+	return api.InTx(ctx, s.DB, func(tx *sql.Tx) error {
 		st, err := lock(ctx, tx, id)
 		if err != nil {
 			return err
@@ -323,6 +332,15 @@ func (s *Server) tally(_ http.ResponseWriter, r *http.Request) (any, error) {
 	}
 	ctx, cancel := api.Detach(r)
 	defer cancel()
+	res, err := s.runTally(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// runTally tallies an election whose voting is closed in the log.
+func (s *Server) runTally(ctx context.Context, id merkle.Hash) (*tally.Result, error) {
 	export, err := api.Export(ctx, s.Log, id)
 	if err != nil {
 		return nil, fmt.Errorf("log: %w", err)
@@ -333,7 +351,7 @@ func (s *Server) tally(_ http.ResponseWriter, r *http.Request) (any, error) {
 	}
 	switch rep.Phase {
 	case election.PhaseComplete:
-		return rep.Result, nil
+		return rep.Result, s.markTallied(ctx, id)
 	case election.PhaseVotingClosed:
 	default:
 		return nil, api.Errorf(http.StatusConflict, "the voting is not closed; the log is in phase %q", rep.Phase)
@@ -357,7 +375,68 @@ func (s *Server) tally(_ http.ResponseWriter, r *http.Request) (any, error) {
 	if _, err := api.AppendRecords(ctx, s.Log, id, rep.Log.Entries, records); err != nil {
 		return nil, fmt.Errorf("log: %w", err)
 	}
-	return res, nil
+	return res, s.markTallied(ctx, id)
+}
+
+func (s *Server) markTallied(ctx context.Context, id merkle.Hash) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE reg_elections SET tallied = true WHERE id = $1`, id[:])
+	return err
+}
+
+// RunDue does what the schedules of the elections ask for at time now: it
+// closes the registration of the elections whose time has come, and tallies
+// those whose voting time has passed, as soon as the voting is closed in the
+// log. Replicas may run it at the same time; a step that another one did
+// already or that cannot be done yet is skipped. It returns the first error
+// of the others.
+func (s *Server) RunDue(ctx context.Context, now time.Time) (err error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT id, manifest, phase FROM reg_elections WHERE NOT tallied AND phase <> $1`, phaseSetup)
+	if err != nil {
+		return err
+	}
+	type due struct {
+		id       merkle.Hash
+		phase    string
+		schedule publog.Schedule
+	}
+	var work []due
+	for rows.Next() {
+		var rawID, rawManifest []byte
+		var d due
+		if err := rows.Scan(&rawID, &rawManifest, &d.phase); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		var m publog.Manifest
+		if err := canon.Unmarshal(rawManifest, &m); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if m.Schedule != nil {
+			d.id, d.schedule = merkle.Hash(rawID), *m.Schedule
+			work = append(work, d)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_ = rows.Close()
+	at := uint64(max(now.Unix(), 0)) //nolint:gosec // not negative
+	for _, d := range work {
+		var step error
+		switch {
+		case d.phase == phaseOpen && d.schedule.RegistrationClose != 0 && at >= d.schedule.RegistrationClose:
+			step = s.closeRegistration(ctx, d.id)
+		case d.phase == phaseClosed && d.schedule.VotingClose != 0 && at >= d.schedule.VotingClose:
+			_, step = s.runTally(ctx, d.id)
+		}
+		// A conflict means that somebody did the step, or that it cannot be done
+		// yet (the voting is not closed in the log).
+		if status, ok := api.ErrorStatus(step); step != nil && (!ok || status != http.StatusConflict) && err == nil {
+			err = step
+		}
+	}
+	return err
 }
 
 func (s *Server) newSession(w http.ResponseWriter, r *http.Request) (any, error) {

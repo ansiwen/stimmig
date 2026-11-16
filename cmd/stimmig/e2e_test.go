@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -210,6 +211,43 @@ func TestElectionFromCommandLine(t *testing.T) {
 			t.Errorf("verify output lacks %q:\n%s", want, out)
 		}
 	}
+
+	// An election that the schedule drives: the services close and open the
+	// phases at their times, and the admin does nothing after the roll.
+	t0 := time.Now().Add(time.Hour).Truncate(time.Second)
+	def = write("scheduled.json", fmt.Sprintf(`{"title": "Scheduled", "tally": {"candidates": ["A", "B"], "method": "schulze", "max_ranks": 2},
+		"schedule": {"registration_close": %q, "voting_open": %q, "voting_close": %q}}`,
+		t0.Format(time.RFC3339), t0.Add(time.Hour).Format(time.RFC3339), t0.Add(2*time.Hour).Format(time.RFC3339)))
+	id = strings.TrimSpace(stimmig(t, 0, "admin", "create", "-definition", def))
+	stimmig(t, 0, "admin", "roll", "-election", id, "-voters", voters)
+	sched := register(id, "ada@example.org")
+	runDue := func(at time.Time) {
+		t.Helper()
+		if err := reg.RunDue(ctx, at); err != nil {
+			t.Fatalf("registrar at %s: %v", at, err)
+		}
+		if err := box.RunDue(ctx, at); err != nil {
+			t.Fatalf("ballot box at %s: %v", at, err)
+		}
+	}
+	runDue(t0.Add(-time.Minute)) // nothing is due
+	stimmig(t, 1, "client", "cast", "-state", sched, "-ranking", "B")
+	runDue(t0) // the registration closes; the voting is not due yet
+	stimmig(t, 1, "client", "cast", "-state", sched, "-ranking", "B")
+	runDue(t0.Add(time.Hour)) // the voting opens
+	stimmig(t, 0, "client", "cast", "-state", sched, "-ranking", "B>A")
+	runDue(t0.Add(2 * time.Hour)) // the voting closes, the ballots are published, and the key
+	runDue(t0.Add(2 * time.Hour)) // and again: nothing happens
+	if out := stimmig(t, 0, "client", "check", "-state", sched); !strings.Contains(out, "decrypted as: B>A") || !strings.Contains(out, "Winners: B") {
+		t.Fatalf("check after the scheduled tally: %s", out)
+	}
+	if out := stimmig(t, 0, "admin", "tally", "-election", id); !strings.Contains(out, "winners: B") {
+		t.Fatalf("the admin's tally of a scheduled election: %s", out)
+	}
+	// A schedule in the wrong order is refused by the admin command.
+	stimmig(t, 1, "admin", "create", "-definition", write("badsched.json", fmt.Sprintf(
+		`{"title": "x", "tally": {"candidates": ["A", "B"], "method": "schulze"}, "schedule": {"registration_close": %q, "voting_open": %q}}`,
+		t0.Add(time.Hour).Format(time.RFC3339), t0.Format(time.RFC3339))))
 
 	// An election without receipts: after casting, the client keeps
 	// neither the credential nor the ballot.

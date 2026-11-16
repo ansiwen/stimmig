@@ -66,21 +66,24 @@ func TestManifestValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	bad := map[string]func(*Manifest){
-		"version":           func(m *Manifest) { m.Version = 2 },
-		"nonce":             func(m *Manifest) { m.Nonce = m.Nonce[:15] },
-		"log hash":          func(m *Manifest) { m.Algorithms.LogHash = "sha1" },
-		"tree head":         func(m *Manifest) { m.Algorithms.TreeHead = "ed25519-v2" },
-		"log key":           func(m *Manifest) { m.LogKey = m.LogKey[:31] },
-		"tally":             func(m *Manifest) { m.Tally.Method = "plurality" },
-		"no tally":          func(m *Manifest) { m.Tally = tally.Manifest{} },
-		"no algorithm":      func(m *Manifest) { m.Algorithms = Algorithms{} },
-		"credential":        func(m *Manifest) { m.Algorithms.Credential = "blind-schnorr-v1" },
-		"encryption":        func(m *Manifest) { m.Algorithms.BallotEncryption = "none" },
-		"signature":         func(m *Manifest) { m.Algorithms.BallotSignature = "ml-dsa-v1" },
-		"receipt mode":      func(m *Manifest) { m.ReceiptMode = "maybe" },
-		"receipt alg":       func(m *Manifest) { m.Algorithms.ReceiptSignature = "" },
-		"receipt key":       func(m *Manifest) { m.ReceiptKey = nil },
-		"client hash":       func(m *Manifest) { m.ClientHash = []byte{1, 2, 3} },
+		"version":      func(m *Manifest) { m.Version = 2 },
+		"nonce":        func(m *Manifest) { m.Nonce = m.Nonce[:15] },
+		"log hash":     func(m *Manifest) { m.Algorithms.LogHash = "sha1" },
+		"tree head":    func(m *Manifest) { m.Algorithms.TreeHead = "ed25519-v2" },
+		"log key":      func(m *Manifest) { m.LogKey = m.LogKey[:31] },
+		"tally":        func(m *Manifest) { m.Tally.Method = "plurality" },
+		"no tally":     func(m *Manifest) { m.Tally = tally.Manifest{} },
+		"no algorithm": func(m *Manifest) { m.Algorithms = Algorithms{} },
+		"credential":   func(m *Manifest) { m.Algorithms.Credential = "blind-schnorr-v1" },
+		"encryption":   func(m *Manifest) { m.Algorithms.BallotEncryption = "none" },
+		"signature":    func(m *Manifest) { m.Algorithms.BallotSignature = "ml-dsa-v1" },
+		"receipt mode": func(m *Manifest) { m.ReceiptMode = "maybe" },
+		"receipt alg":  func(m *Manifest) { m.Algorithms.ReceiptSignature = "" },
+		"receipt key":  func(m *Manifest) { m.ReceiptKey = nil },
+		"client hash":  func(m *Manifest) { m.ClientHash = []byte{1, 2, 3} },
+		"schedule: voting opens before registration closes": func(m *Manifest) { m.Schedule = &Schedule{RegistrationClose: 200, VotingOpen: 100} },
+		"schedule: voting closes before it opens":           func(m *Manifest) { m.Schedule = &Schedule{VotingOpen: 200, VotingClose: 100} },
+		"schedule: voting closes before registration":       func(m *Manifest) { m.Schedule = &Schedule{RegistrationClose: 300, VotingClose: 100} },
 		"issuing key":       func(m *Manifest) { m.IssuingKey = m.IssuingKey[1:] },
 		"issuing key proof": func(m *Manifest) { m.IssuingKeyProof = nil },
 		"proof of another key": func(m *Manifest) {
@@ -204,5 +207,30 @@ func TestTreeHead(t *testing.T) {
 	var back TreeHead
 	if err := canon.Unmarshal(data, &back); err != nil || back.Verify(pub) != nil {
 		t.Fatalf("round trip: %v", err)
+	}
+}
+
+func TestScheduleRoundTrip(t *testing.T) {
+	for _, sched := range []*Schedule{nil, {}, {VotingClose: 5}, {RegistrationClose: 1, VotingOpen: 2, VotingClose: 3}} {
+		m := testManifest()
+		m.Schedule = sched
+		if err := m.Validate(); err != nil {
+			t.Fatalf("%+v: %v", sched, err)
+		}
+		data, err := EncodeEntry(TypeManifest, m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, body, err := DecodeEntry(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var back Manifest
+		if err := canon.UnmarshalStrict(body, &back); err != nil {
+			t.Fatalf("%+v: %v", sched, err)
+		}
+		if (back.Schedule == nil) != (sched == nil) || (sched != nil && *back.Schedule != *sched) {
+			t.Fatalf("round trip: %+v became %+v", sched, back.Schedule)
+		}
 	}
 }

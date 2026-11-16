@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/ansiwen/stimmig/api"
 	"github.com/ansiwen/stimmig/merkle"
@@ -40,6 +41,39 @@ type definition struct {
 	Title       string         `json:"title"`
 	ReceiptMode string         `json:"receipt_mode"` // "full" (default) or "none"
 	Tally       tally.Manifest `json:"tally"`
+	// Schedule gives times in RFC 3339 at which the services close and open the
+	// phases by themselves; every time is optional.
+	Schedule struct {
+		RegistrationClose string `json:"registration_close"`
+		VotingOpen        string `json:"voting_open"`
+		VotingClose       string `json:"voting_close"`
+	} `json:"schedule"`
+}
+
+// schedule converts the times of a definition.
+func (d definition) schedule() (*publog.Schedule, error) {
+	var out publog.Schedule
+	for _, t := range []struct {
+		name, text string
+		to         *uint64
+	}{
+		{"registration_close", d.Schedule.RegistrationClose, &out.RegistrationClose},
+		{"voting_open", d.Schedule.VotingOpen, &out.VotingOpen},
+		{"voting_close", d.Schedule.VotingClose, &out.VotingClose},
+	} {
+		if t.text == "" {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339, t.text)
+		if err != nil || at.Unix() <= 0 {
+			return nil, fmt.Errorf("schedule.%s: not a time in RFC 3339: %q", t.name, t.text)
+		}
+		*t.to = uint64(at.Unix()) //nolint:gosec // checked above
+	}
+	if out == (publog.Schedule{}) {
+		return nil, nil
+	}
+	return &out, out.Validate()
 }
 
 func runAdmin(args []string, stdout, stderr io.Writer) int {
@@ -132,6 +166,10 @@ func adminCreate(ctx context.Context, log, reg, box *api.Client, definitionPath 
 		ReceiptMode: def.ReceiptMode,
 	}
 	if _, err := rand.Read(m.Nonce); err != nil {
+		return merkle.Hash{}, err
+	}
+	var err error
+	if m.Schedule, err = def.schedule(); err != nil {
 		return merkle.Hash{}, err
 	}
 	// Check the definition before any service creates keys for it.

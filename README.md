@@ -119,6 +119,8 @@ export STIMMIG_LOG_URL=http://127.0.0.1:8081 STIMMIG_LOG_ADMIN_TOKEN=log-admin
 export STIMMIG_REGISTRAR_URL=http://127.0.0.1:8082 STIMMIG_REGISTRAR_ADMIN_TOKEN=registrar-admin
 export STIMMIG_BALLOTBOX_URL=http://127.0.0.1:8083 STIMMIG_BALLOTBOX_ADMIN_TOKEN=ballotbox-admin
 echo '{"title": "Board", "tally": {"candidates": ["A", "B", "C"], "method": "schulze"}}' > election.json
+# Optional: "schedule": {"registration_close": "2027-01-10T18:00:00Z", "voting_open": "2027-01-11T08:00:00Z", "voting_close": "2027-01-12T18:00:00Z"}
+# then the services close, open and tally by themselves; the admin does the roll only.
 echo 'ada@example.org' > voters.txt
 ID=$(go run ./cmd/stimmig admin create -definition election.json)
 go run ./cmd/stimmig admin roll -election $ID -voters voters.txt

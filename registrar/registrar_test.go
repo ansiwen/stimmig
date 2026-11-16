@@ -46,6 +46,12 @@ type env struct {
 // setup starts a log service and a registrar and creates an election.
 func setup(t *testing.T) *env {
 	t.Helper()
+	return setupWith(t, nil)
+}
+
+// setupWith is setup with a change of the manifest before the election is created.
+func setupWith(t *testing.T, change func(*publog.Manifest)) *env {
+	t.Helper()
 	db := testdb.Open(t)
 	store, err := logsvc.NewStore(ctx, db)
 	if err != nil {
@@ -90,6 +96,9 @@ func setup(t *testing.T) *env {
 	}
 	e.manifest = testkit.Manifest(logKey.LogKey, testkit.SharedKeys())
 	e.manifest.IssuingKey, e.manifest.IssuingKeyProof, e.manifest.ElectionKey = keys.IssuingKey, keys.IssuingKeyProof, keys.ElectionKey
+	if change != nil {
+		change(&e.manifest)
+	}
 	if err := (&api.Client{Base: logSrv.URL, Token: "la"}).Do(ctx, "POST", "/v1/elections", e.manifest, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -495,5 +504,60 @@ func TestCatchUpAfterALostTransaction(t *testing.T) {
 	}
 	if rep := e.report(); rep.Issued != 2 || rep.Phase != election.PhaseRegistrationClosed {
 		t.Fatalf("after the close: %+v", rep)
+	}
+}
+
+// The registrar closes the registration at the time of the schedule, once.
+func TestScheduleClosesRegistration(t *testing.T) {
+	base := time.Date(2027, 1, 1, 12, 0, 0, 0, time.UTC)
+	e := setupWith(t, func(m *publog.Manifest) {
+		m.Schedule = &publog.Schedule{RegistrationClose: uint64(base.Add(time.Hour).Unix())}
+	})
+	roll := api.Roll{Voters: []api.Voter{{Provider: "email", Subject: "ada@example.org"}}}
+	if err := e.admin.Do(ctx, "PUT", e.electPath+"/roll", roll, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.srv.RunDue(ctx, base); err != nil {
+		t.Fatal(err)
+	}
+	if rep := e.report(); rep.Phase != election.PhaseRegistration {
+		t.Fatalf("closed before its time: %s", rep.Phase)
+	}
+	if err := e.srv.RunDue(ctx, base.Add(time.Hour-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if rep := e.report(); rep.Phase != election.PhaseRegistration {
+		t.Fatalf("closed a second early: %s", rep.Phase)
+	}
+	if err := e.srv.RunDue(ctx, base.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if rep := e.report(); rep.Phase != election.PhaseRegistrationClosed {
+		t.Fatalf("not closed at its time: %s", rep.Phase)
+	}
+	// Again, and later: nothing more happens, and nothing fails. The voting
+	// time is not scheduled, so the registrar does not tally either.
+	for _, later := range []time.Duration{time.Hour, 48 * time.Hour} {
+		if err := e.srv.RunDue(ctx, base.Add(later)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if rep := e.report(); rep.Log.Entries != 3 {
+		t.Fatalf("%d entries", rep.Log.Entries)
+	}
+}
+
+// An election without a schedule is left to the admin.
+func TestNoScheduleNoAction(t *testing.T) {
+	e := setup(t)
+	roll := api.Roll{Voters: []api.Voter{{Provider: "email", Subject: "ada@example.org"}}}
+	if err := e.admin.Do(ctx, "PUT", e.electPath+"/roll", roll, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.srv.RunDue(ctx, time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if rep := e.report(); rep.Phase != election.PhaseRegistration {
+		t.Fatalf("an election without a schedule changed: %s", rep.Phase)
 	}
 }

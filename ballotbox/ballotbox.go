@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/ansiwen/stimmig/api"
 	"github.com/ansiwen/stimmig/ballot"
@@ -222,14 +223,20 @@ func (s *Server) open(_ http.ResponseWriter, r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	rep, err := s.logReport(r.Context(), id)
+	return nil, s.openVoting(r.Context(), id)
+}
+
+// openVoting opens the voting of an election whose registration is closed in
+// the log.
+func (s *Server) openVoting(ctx context.Context, id merkle.Hash) error {
+	rep, err := s.logReport(ctx, id)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if rep.Phase != election.PhaseRegistrationClosed {
-		return nil, api.Errorf(http.StatusConflict, "registration is not closed; the log is in phase %q", rep.Phase)
+		return api.Errorf(http.StatusConflict, "registration is not closed; the log is in phase %q", rep.Phase)
 	}
-	return nil, s.setPhase(r.Context(), id, PhaseOpen, PhaseSetup)
+	return s.setPhase(ctx, id, PhaseOpen, PhaseSetup)
 }
 
 // close stops accepting ballots and publishes them in the log, ordered by
@@ -241,45 +248,50 @@ func (s *Server) close(_ http.ResponseWriter, r *http.Request) (any, error) {
 	}
 	ctx, cancel := api.Detach(r)
 	defer cancel()
+	return nil, s.closeVoting(ctx, id)
+}
+
+// closeVoting closes the voting of an election and publishes its ballots.
+func (s *Server) closeVoting(ctx context.Context, id merkle.Hash) error {
 	if err := s.setPhase(ctx, id, PhaseClosed, PhaseOpen, PhaseClosed); err != nil {
-		return nil, err
+		return err
 	}
 	rep, err := s.logReport(ctx, id)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	// If an earlier close published the ballots and failed afterwards, the
 	// log is already past the registration.
 	if rep.Phase == election.PhaseRegistrationClosed {
 		rows, err := s.DB.QueryContext(ctx, `SELECT ballot FROM box_ballots WHERE election = $1`, id[:])
 		if err != nil {
-			return nil, err
+			return err
 		}
 		defer func() { _ = rows.Close() }()
 		var ballots []election.Ballot
 		for rows.Next() {
 			var raw []byte
 			if err := rows.Scan(&raw); err != nil {
-				return nil, err
+				return err
 			}
 			var b election.Ballot
 			if err := canon.Unmarshal(raw, &b); err != nil {
-				return nil, err
+				return err
 			}
 			ballots = append(ballots, b)
 		}
 		if err := rows.Err(); err != nil {
-			return nil, err
+			return err
 		}
 		records, err := election.BallotRecords(ballots)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if _, err := api.AppendRecords(ctx, s.Log, id, rep.Log.Entries, records); err != nil {
-			return nil, fmt.Errorf("log: %w", err)
+			return fmt.Errorf("log: %w", err)
 		}
 	}
-	return nil, s.setPhase(ctx, id, PhasePublished, PhaseClosed)
+	return s.setPhase(ctx, id, PhasePublished, PhaseClosed)
 }
 
 func (s *Server) cast(w http.ResponseWriter, r *http.Request) (any, error) {
@@ -425,4 +437,59 @@ func origin(raw string) string {
 		return ""
 	}
 	return u.Scheme + "://" + u.Host
+}
+
+// RunDue does what the schedules of the elections ask for at time now: it
+// opens the voting once the registration is closed in the log, and closes it
+// and publishes the ballots. Replicas may run it at the same time; a step
+// that another one did already or that cannot be done yet is skipped. It
+// returns the first error of the others.
+func (s *Server) RunDue(ctx context.Context, now time.Time) (err error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT id, manifest, phase FROM box_elections WHERE phase IN ($1, $2)`, PhaseSetup, PhaseOpen)
+	if err != nil {
+		return err
+	}
+	type due struct {
+		id       merkle.Hash
+		phase    string
+		schedule publog.Schedule
+	}
+	var work []due
+	for rows.Next() {
+		var rawID, rawManifest []byte
+		var d due
+		if err := rows.Scan(&rawID, &rawManifest, &d.phase); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		var m publog.Manifest
+		if err := canon.Unmarshal(rawManifest, &m); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if m.Schedule != nil {
+			d.id, d.schedule = merkle.Hash(rawID), *m.Schedule
+			work = append(work, d)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_ = rows.Close()
+	at := uint64(max(now.Unix(), 0)) //nolint:gosec // not negative
+	for _, d := range work {
+		var step error
+		switch {
+		case d.phase == PhaseSetup && d.schedule.VotingOpen != 0 && at >= d.schedule.VotingOpen:
+			step = s.openVoting(ctx, d.id)
+		case d.phase == PhaseOpen && d.schedule.VotingClose != 0 && at >= d.schedule.VotingClose:
+			step = s.closeVoting(ctx, d.id)
+		}
+		// A conflict means that somebody did the step, or that it cannot be
+		// done yet (the registration is not closed in the log).
+		if status, ok := api.ErrorStatus(step); step != nil && (!ok || status != http.StatusConflict) && err == nil {
+			err = step
+		}
+	}
+	return err
 }

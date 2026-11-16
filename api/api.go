@@ -274,3 +274,30 @@ func Migrate(ctx context.Context, db *sql.DB, name string, steps []string) error
 		return nil
 	})
 }
+
+// ErrorStatus returns the status of an error made with Errorf.
+func ErrorStatus(err error) (int, bool) {
+	var he *httpError
+	if errors.As(err, &he) {
+		return he.code, true
+	}
+	return 0, false
+}
+
+// Every calls fn now and then every interval until ctx ends. The services
+// use it for their schedules. A failure of fn is passed to onError and does
+// not stop the loop.
+func Every(ctx context.Context, interval time.Duration, fn func(ctx context.Context, now time.Time) error, onError func(error)) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		if err := fn(ctx, time.Now()); err != nil && onError != nil {
+			onError(err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}

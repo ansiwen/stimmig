@@ -3,10 +3,13 @@ package api
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ansiwen/stimmig/canon"
 	"github.com/ansiwen/stimmig/internal/testdb"
@@ -124,5 +127,55 @@ func TestReadLimit(t *testing.T) {
 	r = httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(make([]byte, 65)))
 	if err := ReadLimit(httptest.NewRecorder(), r, &out, 64); err == nil {
 		t.Fatal("body over the limit accepted")
+	}
+}
+
+func TestEvery(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := make(chan struct{}, 100)
+	var errs int
+	var mu sync.Mutex
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		Every(ctx, 5*time.Millisecond, func(context.Context, time.Time) error {
+			calls <- struct{}{}
+			return errors.New("fails every time")
+		}, func(error) {
+			mu.Lock()
+			errs++
+			mu.Unlock()
+		})
+	}()
+	// It calls at once, goes on after failures, and stops with the context.
+	for i := 0; i < 3; i++ {
+		select {
+		case <-calls:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("call %d did not happen", i)
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not stop")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if errs < 3 {
+		t.Fatalf("%d errors reported", errs)
+	}
+}
+
+func TestErrorStatus(t *testing.T) {
+	if code, ok := ErrorStatus(fmt.Errorf("wrapped: %w", Errorf(http.StatusConflict, "x"))); !ok || code != http.StatusConflict {
+		t.Fatalf("%d, %v", code, ok)
+	}
+	if _, ok := ErrorStatus(errors.New("plain")); ok {
+		t.Fatal("a plain error has a status")
+	}
+	if _, ok := ErrorStatus(nil); ok {
+		t.Fatal("nil has a status")
 	}
 }

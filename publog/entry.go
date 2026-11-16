@@ -84,9 +84,39 @@ type Manifest struct {
 	// ReceiptKey is the ballot box's Ed25519 public key for receipts. It is
 	// present exactly in receipt mode full.
 	ReceiptKey []byte `cbor:"receipt_key,omitempty"`
+	// Schedule holds the times at which the services close and open the
+	// phases by themselves. It is optional, and so is every time in it.
+	Schedule *Schedule `cbor:"schedule,omitempty"`
 	// ClientHash is the hash of the voting client's bundle that the ballot
 	// box serves (ballotbox.ClientHash). It is optional.
 	ClientHash []byte `cbor:"client_hash,omitempty"`
+}
+
+// Schedule holds the times, in seconds since the Unix epoch, at which the
+// services act without an admin: the registrar closes the registration, the
+// ballot box opens and closes the voting, and the registrar tallies once the
+// voting is closed in the log. A time that is 0 is not scheduled; the admin
+// does that step.
+type Schedule struct {
+	RegistrationClose uint64 `cbor:"registration_close,omitempty"`
+	VotingOpen        uint64 `cbor:"voting_open,omitempty"`
+	VotingClose       uint64 `cbor:"voting_close,omitempty"`
+}
+
+// Validate checks the order of the times: the registration closes before the
+// voting opens (the default of section 4; overlapping is not implemented),
+// and the voting closes after it opens.
+func (s Schedule) Validate() error {
+	if s.RegistrationClose != 0 && s.VotingOpen != 0 && s.RegistrationClose >= s.VotingOpen {
+		return errors.New("publog: the registration must close before the voting opens")
+	}
+	if s.VotingOpen != 0 && s.VotingClose != 0 && s.VotingOpen >= s.VotingClose {
+		return errors.New("publog: the voting must close after it opens")
+	}
+	if s.RegistrationClose != 0 && s.VotingClose != 0 && s.RegistrationClose >= s.VotingClose {
+		return errors.New("publog: the registration must close before the voting closes")
+	}
+	return nil
 }
 
 // Algorithms names the algorithms of an election by versioned identifiers.
@@ -148,6 +178,11 @@ func (m Manifest) Validate() error {
 		return errors.New("publog: receipt key has the wrong size")
 	} else if !full && len(m.ReceiptKey) != 0 {
 		return errors.New("publog: receipt key in receipt mode none")
+	}
+	if m.Schedule != nil {
+		if err := m.Schedule.Validate(); err != nil {
+			return err
+		}
 	}
 	if len(m.ClientHash) != 0 && len(m.ClientHash) != merkle.HashSize {
 		return errors.New("publog: client hash has the wrong size")

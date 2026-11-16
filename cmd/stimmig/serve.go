@@ -32,6 +32,7 @@ const serveHelp = `environment of the services:
   STIMMIG_LISTEN           listen address, default :8080
   STIMMIG_ADMIN_TOKEN      bearer token of this service's admin API
   STIMMIG_DB_MAX_CONNS     size of the database pool, default 20
+  STIMMIG_SCHEDULE_INTERVAL  how often the registrar and the ballot box look at the schedules, default 15s
   STIMMIG_KEY_ENCRYPTION_KEY  64 hexadecimal characters; encrypts the private keys in the database;
                            required unless STIMMIG_ALLOW_PLAIN_KEYS=1 (development)
 log:
@@ -85,7 +86,11 @@ func serve(ctx context.Context, role string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// The services stop on SIGTERM: the schedule loop with them.
+	ctx, cancelSignals := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
+	defer cancelSignals()
 	var handler func(db *sql.DB) (http.Handler, error)
+	var due func(ctx context.Context, now time.Time) error // what the schedules of the elections ask for
 	switch role {
 	case "log":
 		regToken, boxToken := e.get("STIMMIG_REGISTRAR_TOKEN"), e.get("STIMMIG_BALLOTBOX_TOKEN")
@@ -143,6 +148,7 @@ func serve(ctx context.Context, role string, stderr io.Writer) error {
 				}
 				s.Providers[oidc.ID()] = oidc
 			}
+			due = s.RunDue
 			return s.Handler(), s.Init(ctx)
 		}
 	case "ballotbox":
@@ -152,6 +158,7 @@ func serve(ctx context.Context, role string, stderr io.Writer) error {
 			if s.ClientDir != "" {
 				s.LogURL, s.RegistrarURL = e.get("STIMMIG_PUBLIC_LOG_URL"), e.get("STIMMIG_PUBLIC_REGISTRAR_URL")
 			}
+			due = s.RunDue
 			return s.Handler(), s.Init(ctx)
 		}
 	}
@@ -196,10 +203,19 @@ func serve(ctx context.Context, role string, stderr io.Writer) error {
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
 		WriteTimeout: 5 * time.Minute, IdleTimeout: 2 * time.Minute,
 	}
+	if due != nil {
+		interval := 15 * time.Second
+		if v := os.Getenv("STIMMIG_SCHEDULE_INTERVAL"); v != "" {
+			if interval, err = time.ParseDuration(v); err != nil || interval < time.Second {
+				return errors.New("STIMMIG_SCHEDULE_INTERVAL must be a duration of a second or more")
+			}
+		}
+		go api.Every(ctx, interval, due, func(err error) {
+			_, _ = fmt.Fprintf(stderr, "stimmig %s: schedule: %v\n", role, err)
+		})
+	}
 	_, _ = fmt.Fprintf(stderr, "stimmig %s: listening on %s\n", role, listen)
-	stop, cancel := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
-	defer cancel()
-	return listenAndServe(stop, srv, ShutdownGrace)
+	return listenAndServe(ctx, srv, ShutdownGrace)
 }
 
 // ShutdownGrace is how long a service finishes the requests in flight after
