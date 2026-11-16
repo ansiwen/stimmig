@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"net/mail"
 	"strings"
 	"time"
 
@@ -161,11 +162,17 @@ func ParseVoters(text string) (api.Roll, error) {
 	var roll api.Roll
 	sc := bufio.NewScanner(strings.NewReader(text))
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	for sc.Scan() {
+	for n := 1; sc.Scan(); n++ {
 		line := strings.TrimSpace(sc.Text())
 		if subject, ok := strings.CutPrefix(line, "oidc:"); ok {
 			roll.Voters = append(roll.Voters, api.Voter{Provider: "oidc", Subject: subject})
 		} else if line != "" {
+			// The roll cannot be changed once it is published, and a line such as
+			// "Ada <ada@example.org>" or two addresses would be a voter who can never
+			// log in.
+			if a, err := mail.ParseAddress(line); err != nil || a.Address != line {
+				return roll, fmt.Errorf("line %d: %q is not a plain email address", n, line)
+			}
 			// The email provider reports addresses in lower case.
 			roll.Voters = append(roll.Voters, api.Voter{Provider: "email", Subject: strings.ToLower(line)})
 		}

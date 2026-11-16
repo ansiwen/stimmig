@@ -258,6 +258,16 @@ func TestElectionFromCommandLine(t *testing.T) {
 	if code, _ := webCall("GET", "/api/elections", "wrong", ""); code != http.StatusUnauthorized {
 		t.Errorf("with a wrong token: %d", code)
 	}
+	for _, route := range []string{"GET /api/elections", "POST /api/preview", "POST /api/elections", "GET /api/elections/" + id,
+		"PUT /api/elections/" + id + "/roll", "POST /api/elections/" + id + "/tally", "POST /api/elections/" + id + "/open-voting"} {
+		method, path, _ := strings.Cut(route, " ")
+		if code, _ := webCall(method, path, "", "{}"); code != http.StatusUnauthorized {
+			t.Errorf("%s without a token: %d", route, code)
+		}
+	}
+	if code, body := webCall("POST", "/api/elections/"+id+"/tally", "web token", ""); code != http.StatusOK || !strings.Contains(body, "Winners") && !strings.Contains(body, "winners") {
+		t.Errorf("tally: %d %s", code, body)
+	}
 	if code, body := webCall("GET", "/api/elections", "web token", ""); code != http.StatusOK || !strings.Contains(body, `"title":"Board election"`) || !strings.Contains(body, `"id":"`+id+`"`) {
 		t.Errorf("list: %d %s", code, body)
 	}

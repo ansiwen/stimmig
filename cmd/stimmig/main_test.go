@@ -89,6 +89,35 @@ func TestVerifyCommandFails(t *testing.T) {
 	}
 }
 
+func TestAdminWebFailsClosed(t *testing.T) {
+	for k, v := range map[string]string{
+		"STIMMIG_LOG_URL": "http://l", "STIMMIG_REGISTRAR_URL": "http://r", "STIMMIG_BALLOTBOX_URL": "http://b",
+		"STIMMIG_LOG_ADMIN_TOKEN": "la", "STIMMIG_REGISTRAR_ADMIN_TOKEN": "ra", "STIMMIG_BALLOTBOX_ADMIN_TOKEN": "ba",
+		"STIMMIG_ADMINWEB_TOKEN": "short",
+	} {
+		t.Setenv(k, v)
+	}
+	check := func(want string) {
+		t.Helper()
+		var errOut bytes.Buffer
+		if code := run([]string{"admin-web"}, io.Discard, &errOut); code != 1 || !strings.Contains(errOut.String(), want) {
+			t.Fatalf("want %q: exit %d: %s", want, code, errOut.String())
+		}
+	}
+	check("at least 16 characters")
+	t.Setenv("STIMMIG_LOG_ADMIN_TOKEN", strings.Repeat("l", 32))
+	t.Setenv("STIMMIG_ADMINWEB_TOKEN", strings.Repeat("l", 32))
+	check("must differ")
+	t.Setenv("STIMMIG_ADMINWEB_TOKEN", strings.Repeat("t", 32))
+	// A container's STIMMIG_LISTEN does not move the page off loopback.
+	t.Setenv("STIMMIG_LISTEN", ":8080")
+	t.Setenv("STIMMIG_ADMINWEB_LISTEN", ":8090")
+	check("not a loopback address")
+	if loopback(":8090") || loopback("0.0.0.0:1") || !loopback("127.0.0.1:1") || !loopback("[::1]:1") || !loopback("localhost:1") {
+		t.Error("loopback")
+	}
+}
+
 func TestServiceTokensMustDiffer(t *testing.T) {
 	t.Setenv("STIMMIG_DATABASE_URL", "postgres://unused")
 	t.Setenv("STIMMIG_ADMIN_TOKEN", "same")

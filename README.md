@@ -144,12 +144,12 @@ The admin web page does the same in a browser. It needs the three admin tokens
 in its environment and a token of its own that the page asks for:
 
 ```bash
-export STIMMIG_ADMINWEB_TOKEN=a-long-token-of-your-own   # at least 16 characters
+export STIMMIG_ADMINWEB_TOKEN=$(openssl rand -hex 32)    # must differ from the three service admin tokens
 go run ./cmd/stimmig admin-web                           # http://127.0.0.1:8090/
 ```
 
-It speaks HTTP and listens on the loopback address; put TLS in front of it for
-any other address.
+It speaks HTTP and listens on the loopback address (`STIMMIG_ADMINWEB_LISTEN`);
+for any other address set `STIMMIG_ADMINWEB_ALLOW_REMOTE=1` and put TLS in front.
 
 Anyone can download and verify the log:
 

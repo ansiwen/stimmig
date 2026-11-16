@@ -1,6 +1,17 @@
 package admin
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestParseVotersRefusesWhatCannotLogIn(t *testing.T) {
+	for _, line := range []string{"Ada <ada@example.org>", "a@example.org, b@example.org", "ada", "ada@"} {
+		if _, err := ParseVoters("ok@example.org\n" + line + "\n"); err == nil || !strings.Contains(err.Error(), "line 2") {
+			t.Errorf("%q: %v", line, err)
+		}
+	}
+}
 
 func TestParseVoters(t *testing.T) {
 	roll, err := ParseVoters(" Ada@Example.org \n\noidc:https://idp.example#User-42\n")
