@@ -93,3 +93,15 @@ jobs:
         env:
           STIMMIG_DB_URL_PREFIX: postgres://stimmig:stimmig@localhost
         run: web/check/run.sh
+
+  model:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install ProVerif
+        run: sudo apt-get update && sudo apt-get install -y proverif
+      - name: Check the protocol model
+        run: model/run.sh

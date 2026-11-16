@@ -17,7 +17,7 @@ The project follows the milestones of SPEC.md section 13.
 | M5: Web client | Voting client done; the admin interface is the command line |
 | M6: Deployment | Image, Helm chart and encrypted key store done; no PKCS#11 HSM |
 | M7: Identity | OpenID Connect done; ATProto not built |
-| M8: Review | Not started: no protocol model, no external review |
+| M8: Review | Protocol model done (`model/`, ProVerif); no external review yet |
 
 ## Tally
 
@@ -180,6 +180,12 @@ election (needs Node.js with playwright and a Chromium).
 
 The page runs the same client code as `stimmig client`, compiled to
 WebAssembly.
+
+## Protocol model
+
+`model/` holds a ProVerif model of the protocol: ballot privacy, independence of votes
+and secrecy until the close, with control models that must fail. See
+[model/README.md](model/README.md) for what it proves and what it does not.
 
 ## Tests
 
