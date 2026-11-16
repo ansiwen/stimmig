@@ -1,0 +1,103 @@
+(* CONTROL: integrity without binding the ciphertext to the credential (the
+   HPKE info lacks the credential key). The independence queries must FAIL:
+   the attacker copies an honest ciphertext into a ballot of its own credential
+   and the vote is counted under that credential. Compare integrity.pv.
+
+   Integrity of profile A (SPEC.md sections 2, 5 and 12), against an attacker
+   that controls the network and one eligible voter, C.
+
+   Queries:
+   1. Independence of votes: a vote is counted only under the credential that
+      cast it. Nobody can have a copy of an honest voter's vote counted under
+      another credential, here the attacker's own.
+   2. The votes stay secret until the key is published at the close.
+
+   What is NOT machine-checked here:
+   - That a ballot is accepted only with a signature that the registrar made
+     (unforgeability of credentials). ProVerif does not finish this query
+     with the blind signature equation, even for the box alone. It is the
+     unforgeability of the RSA blind signature, which the model assumes by
+     giving the attacker no way to sign except through the registrar.
+   - Counting. That the registrar issues one credential per identity
+   (a primary key in its database), that the ballot box accepts one ballot per
+   credential (an atomic insert), and so cast <= issued <= eligible, are
+   checks of the implementation and of the verifier (SPEC.md section 12), not
+   of this model. ProVerif treats a message on a private channel as available
+   as often as needed, and it cannot say that an entry is not in a table, so
+   a token or a table cannot prove "only once" however it is written.
+
+   Registration closes before the voting opens (the phases). *)
+
+free c: channel.                 (* the network; also the way to the ballot box *)
+free creg: channel [private].    (* honest voters to the registrar, authenticated *)
+free ccor: channel.              (* the corrupt voter C to the registrar *)
+free eid: bitstring.
+free vA, vB: bitstring [private].
+free idA, idB, idC: ident.
+table accepted(pkey, bitstring).
+
+event HonestCast(pkey).
+event Counted(pkey, bitstring).
+
+(* The registrar signs blinded credentials of honest voters. *)
+let Registrar(skR: skey) =
+  in(creg, (id: ident, b: bitstring));
+  out(creg, rsasign(b, skR)).
+
+(* The corrupt voter C asks for credentials as itself. *)
+let RegistrarForC(skR: skey) =
+  in(ccor, b: bitstring);
+  out(ccor, rsasign(b, skR)).
+
+let Voter(id: ident, v: bitstring, pkR: pkey, pkE: pkey) =
+  new cred: skey;
+  new r: rand;
+  new r2: rand;
+  let pubc = pk(cred) in
+  let m = h((tagCred, eid, pubc)) in
+  out(creg, (id, blind(m, r)));
+  in(creg, bs: bitstring);
+  let sg = unblind(bs, r) in
+  if rsacheck(sg, pkR) = m then
+  phase 1;
+  let ct = hpke(v, pkE, (tagInfo, eid), r2) in
+  let sb = edsign((tagBallot, eid, ct), cred) in
+  event HonestCast(pubc);
+  out(c, (pubc, sg, ct, sb)).
+
+(* The ballot box accepts a ballot with a valid credential and a valid
+   signature. *)
+let Box(pkR: pkey) =
+  phase 1;
+  in(c, (pubc: pkey, sg: bitstring, ct: bitstring, sb: bitstring));
+  if rsacheck(sg, pkR) = h((tagCred, eid, pubc)) then
+  if edcheck(sb, pubc) = (tagBallot, eid, ct) then
+  insert accepted(pubc, ct).
+
+(* At the close, the key is published and every ballot is decrypted. *)
+let Tally(skE: skey) =
+  phase 2;
+  out(c, skE);
+  get accepted(pubc, ct) in
+  event Counted(pubc, hdec(ct, skE, (tagInfo, eid))).
+
+query p: pkey;
+  event(Counted(p, vA)) ==> event(HonestCast(p)).
+query p: pkey;
+  event(Counted(p, vB)) ==> event(HonestCast(p)).
+query attacker(vA) phase 1.
+query attacker(vB) phase 1.
+
+process
+  new skR: skey;
+  new skE: skey;
+  let pkR = pk(skR) in
+  let pkE = pk(skE) in
+  out(c, pkR);
+  out(c, pkE);
+  ( !Registrar(skR)
+  | !RegistrarForC(skR)
+  | Voter(idA, vA, pkR, pkE)
+  | Voter(idB, vB, pkR, pkE)
+  | !Box(pkR)
+  | Tally(skE) )

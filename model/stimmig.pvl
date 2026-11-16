@@ -1,0 +1,40 @@
+(* Primitives of Stimmig profile A (SPEC.md sections 5 and 6), as symbolic
+   functions of the Dolev-Yao model. *)
+
+type skey.
+type pkey.
+type rand.
+type ident.
+
+fun pk(skey): pkey.
+
+(* Hash, and the context texts of SPEC.md section 5.6, which separate the
+   uses of a key. *)
+fun h(bitstring): bitstring.
+const tagCred: bitstring.
+const tagBallot: bitstring.
+const tagInfo: bitstring.
+
+(* The registrar's RSA blind signature (RFC 9474). The client blinds a
+   message with a random factor, the registrar signs the blinded value, and
+   unblinding gives an ordinary signature on the message. *)
+fun rsasign(bitstring, skey): bitstring.
+reduc forall m: bitstring, sk: skey; rsacheck(rsasign(m, sk), pk(sk)) = m.
+fun blind(bitstring, rand): bitstring.
+reduc forall m: bitstring, r: rand, sk: skey;
+  unblind(rsasign(blind(m, r), sk), r) = rsasign(m, sk).
+
+(* Ed25519, for the ballot signature of the credential key. *)
+fun edsign(bitstring, skey): bitstring.
+reduc forall m: bitstring, sk: skey; edcheck(edsign(m, sk), pk(sk)) = m.
+
+(* HPKE: the message, the recipient's public key, the info input and the
+   randomness. Decryption needs the same info. In the tally, a ciphertext
+   that does not open is the constant invalid (SPEC.md section 5.6). *)
+fun hpke(bitstring, pkey, bitstring, rand): bitstring.
+const invalid: bitstring.
+fun hdec(bitstring, skey, bitstring): bitstring
+reduc forall m: bitstring, sk: skey, info: bitstring, r: rand;
+  hdec(hpke(m, pk(sk), info, r), sk, info) = m
+otherwise forall c: bitstring, sk: skey, info: bitstring;
+  hdec(c, sk, info) = invalid.
