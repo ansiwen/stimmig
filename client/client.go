@@ -68,7 +68,13 @@ type Pending struct {
 	// Code is the confirmation code that the voter types at the registrar
 	// after the login.
 	Code string `json:"code"`
+	// Started is when the session was created, in seconds since the epoch.
+	Started int64 `json:"started"`
 }
+
+// sessionReuse is how long Begin continues a stored session instead of
+// starting a new one. A session lasts an hour at the registrar.
+const sessionReuse = 50 * time.Minute
 
 // PollInterval is the pause between two requests for the credential while
 // the voter logs in.
@@ -153,6 +159,11 @@ func Begin(ctx context.Context, st *State) (loginURL string, err error) {
 		}
 		st.Pending = &Pending{Seed: seed, CredentialKey: priv}
 	}
+	// The voter may have the login mail and the code of the stored session
+	// already: continue it while it surely lives.
+	if p := st.Pending; p.Session != "" && time.Since(time.Unix(p.Started, 0)) < sessionReuse {
+		return p.LoginURL, nil
+	}
 	req, err := st.request(ctx)
 	if err != nil {
 		return "", err
@@ -162,6 +173,7 @@ func Begin(ctx context.Context, st *State) (loginURL string, err error) {
 		return "", err
 	}
 	st.Pending.Session, st.Pending.LoginURL, st.Pending.Code = session.Session, session.URL, session.Code
+	st.Pending.Started = time.Now().Unix()
 	return session.URL, nil
 }
 
@@ -194,6 +206,13 @@ func Complete(ctx context.Context, st *State) error {
 	}
 	sig, err := req.Finalize(cred.BlindSignature)
 	if err != nil {
+		return err
+	}
+	rep, err := st.log(ctx)
+	if err != nil {
+		return err
+	}
+	if err := checkIssued(rep, cred.RollReference); err != nil {
 		return err
 	}
 	st.CredentialKey, st.CredentialSignature, st.RollReference = st.Pending.CredentialKey, sig, cred.RollReference
@@ -243,16 +262,31 @@ func ParseRanking(s string) tally.Ballot {
 	return ranking
 }
 
-// Cast encrypts and signs the ranking, sends it to the ballot box and, in
-// receipt mode full, checks the receipt before it stores ballot and
-// receipt. The ranking must follow the ballot rules of the election.
-func Cast(ctx context.Context, st *State, ranking tally.Ballot) error {
-	if st.CredentialSignature == nil {
-		return errors.New("client: this state holds no credential, or the ballot is already cast")
-	}
+// Prepare builds the ballot for a ranking and stores it in the state. The
+// caller must store the state before it calls Send: the ballot box may
+// receive the ballot although the answer never reaches the client (the tab
+// is closed, the connection breaks), and then only this ballot can be sent
+// again. If the state holds a prepared ballot already, it must be for the
+// same ranking.
+func Prepare(ctx context.Context, st *State, ranking tally.Ballot) error {
 	rep, err := st.log(ctx)
 	if err != nil {
 		return err
+	}
+	return st.prepare(rep, ranking)
+}
+
+func (st *State) prepare(rep *election.Report, ranking tally.Ballot) error {
+	if st.CredentialSignature == nil {
+		return errors.New("client: this state holds no credential, or the ballot is already cast")
+	}
+	if st.Ballot != nil {
+		// An earlier attempt ended without an answer, so the ballot box may
+		// have the ballot. Only that ballot can be sent again.
+		if !sameRanking(st.BallotRanking, ranking) {
+			return errors.New("client: an earlier attempt to cast a different ranking may have reached the ballot box; cast that ranking again to find out")
+		}
+		return nil
 	}
 	m := rep.Log.Manifest
 	// The tally would report a ballot against the rules as invalid; tell
@@ -268,25 +302,46 @@ func Cast(ctx context.Context, st *State, ranking tally.Ballot) error {
 	if err != nil {
 		return err
 	}
-	if st.Ballot != nil {
-		// An earlier attempt ended without an answer, so the ballot box may
-		// have the ballot. Only that ballot can be sent again.
-		if !sameRanking(st.BallotRanking, ranking) {
-			return errors.New("client: an earlier attempt to cast a different ranking may have reached the ballot box; cast that ranking again to find out")
-		}
-		if err := canon.Unmarshal(st.Ballot, &b); err != nil {
-			return err
-		}
-	} else {
-		if st.Ballot, err = canon.Marshal(b); err != nil {
-			return err
-		}
-		st.BallotRanking = ranking
+	if st.Ballot, err = canon.Marshal(b); err != nil {
+		return err
 	}
+	st.BallotRanking = ranking
+	return nil
+}
+
+// Send sends the prepared ballot to the ballot box and, in receipt mode
+// full, checks the receipt before it stores it. A refusal that says that the
+// ballot is not stored deletes the prepared ballot; an error without an
+// answer keeps it, to be sent again.
+func Send(ctx context.Context, st *State) error {
+	rep, err := st.log(ctx)
+	if err != nil {
+		return err
+	}
+	return st.send(ctx, rep)
+}
+
+// refused reports whether err is an answer of the ballot box that tells that
+// the ballot is not stored: a refusal by status. Timeouts, too many requests
+// and errors of the server or the network do not tell.
+func refused(err error) bool {
+	var se *api.StatusError
+	return errors.As(err, &se) && se.Code >= 400 && se.Code < 500 &&
+		se.Code != http.StatusRequestTimeout && se.Code != http.StatusTooManyRequests
+}
+
+func (st *State) send(ctx context.Context, rep *election.Report) error {
+	if st.Ballot == nil {
+		return errors.New("client: no ballot has been prepared")
+	}
+	var b election.Ballot
+	if err := canon.Unmarshal(st.Ballot, &b); err != nil {
+		return err
+	}
+	m := rep.Log.Manifest
 	var receipt api.Receipt
 	if err := (&api.Client{Base: st.BallotBoxURL}).Do(ctx, "POST", api.ElectionPath(st.id())+"/ballots", b, &receipt); err != nil {
-		var refused *api.StatusError
-		if errors.As(err, &refused) && refused.Code >= 400 && refused.Code < 500 {
+		if refused(err) {
 			// The ballot box has not stored this ballot.
 			st.Ballot, st.BallotRanking = nil, nil
 		}
@@ -309,17 +364,34 @@ func Cast(ctx context.Context, st *State, ranking tally.Ballot) error {
 	return nil
 }
 
-// sameRanking compares two rankings, taking nil as the empty ranking.
-func sameRanking(a, b tally.Ballot) bool {
-	if len(a) != len(b) {
-		return false
+// Cast prepares and sends the ballot in one step. A caller that can lose its
+// state, such as a page, should call Prepare, store the state and then Send.
+func Cast(ctx context.Context, st *State, ranking tally.Ballot) error {
+	rep, err := st.log(ctx)
+	if err != nil {
+		return err
 	}
-	for i := range a {
-		if !slices.Equal(a[i], b[i]) {
-			return false
-		}
+	if err := st.prepare(rep, ranking); err != nil {
+		return err
 	}
-	return true
+	return st.send(ctx, rep)
+}
+
+// checkIssued checks that the registrar's answer is in the public log: the
+// roll reference is in the roll, and an issuance for it was logged. A
+// registrar that signs without logging cannot be told from one that does,
+// unless the voter looks.
+func checkIssued(rep *election.Report, ref []byte) error {
+	has := func(refs [][]byte) bool {
+		return slices.ContainsFunc(refs, func(r []byte) bool { return bytes.Equal(r, ref) })
+	}
+	if !has(rep.RollReferences) {
+		return errors.New("client: the roll entry that the registrar names is not in the public roll")
+	}
+	if !has(rep.IssuedReferences) {
+		return errors.New("client: the public log has no issuance for your roll entry, although the registrar signed your credential")
+	}
+	return nil
 }
 
 // Checked is the outcome of a receipt check.
@@ -355,6 +427,11 @@ func Check(ctx context.Context, st *State) (*Checked, error) {
 	leaf, err := election.BallotLeaf(mine)
 	if err != nil {
 		return nil, err
+	}
+	if st.RollReference != nil {
+		if err := checkIssued(rep, st.RollReference); err != nil {
+			return nil, err
+		}
 	}
 	out := &Checked{Phase: rep.Phase, Result: rep.Result}
 	if rep.Phase == election.PhaseSetup || rep.Phase == election.PhaseRegistration || rep.Phase == election.PhaseRegistrationClosed {
@@ -399,4 +476,17 @@ func Check(ctx context.Context, st *State) (*Checked, error) {
 		}
 	}
 	return out, nil
+}
+
+// sameRanking compares two rankings, taking nil as the empty ranking.
+func sameRanking(a, b tally.Ballot) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !slices.Equal(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
 }

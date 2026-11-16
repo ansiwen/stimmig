@@ -226,10 +226,12 @@ func TestElectionFromCommandLine(t *testing.T) {
 	stimmig(t, 1, "client", "register", "-state", cleoState, "-election", id, "-timeout", "300ms",
 		"-log", logSrv.URL, "-registrar", regSrv.URL, "-ballotbox", boxSrv.URL, "-email", "cleo@example.org")
 	login(mails.take(t, "cleo@example.org"), cleoState)
-	cleo := register(id, "cleo@example.org")
-	if cleo != cleoState {
-		t.Fatal("test uses two state files")
+	// The client continues the stored session: it has the credential at once.
+	if out := stimmig(t, 0, "client", "register", "-state", cleoState, "-election", id,
+		"-log", logSrv.URL, "-registrar", regSrv.URL, "-ballotbox", boxSrv.URL, "-email", "cleo@example.org"); !strings.Contains(out, "Credential received") {
+		t.Fatalf("resumed registration: %s", out)
 	}
+	cleo := cleoState
 	stimmig(t, 0, "admin", "close-registration", "-election", id)
 	stimmig(t, 0, "admin", "open-voting", "-election", id)
 	stimmig(t, 0, "client", "cast", "-state", cleo, "-ranking", "yes")

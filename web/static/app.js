@@ -118,7 +118,8 @@ const T = {
 
 const $ = (id) => document.getElementById(id);
 let lang = (navigator.language || 'en').startsWith('de') ? 'de' : 'en';
-const t = (key, ...args) => args.reduce((s, a, i) => s.replace('{' + i + '}', a), T[lang][key]);
+// A function as the replacement: a candidate called "$&" must stay as it is.
+const t = (key, ...args) => args.reduce((s, a, i) => s.replace('{' + i + '}', () => a), T[lang][key]);
 
 // decodeConfig reads the ballot box's answer, a CBOR map of two text
 // strings, without a CBOR library: it only needs the two values.
@@ -299,7 +300,12 @@ async function cast() {
   setStatus('casting');
   $('cast').disabled = true;
   try {
-    const out = await call('stimmigCast', JSON.stringify(groups()));
+    // The ballot is stored before it leaves the browser: if the tab is closed
+    // while it is sent, the ballot box may hold it, and only this ballot can
+    // be sent again.
+    state = (await call('stimmigPrepare', JSON.stringify(groups()))).state;
+    save();
+    const out = await call('stimmigSend');
     const none = !out.error && !out.state.ballot && !out.state.receipt;
     state = out.state;
     if (none) state.cast_without_receipt = true;
@@ -415,12 +421,14 @@ async function start() {
   if (!known.ok) { setStatus(''); return showError(t('unknownElection')); }
   const urls = decodeConfig(new Uint8Array(config));
   state = JSON.parse(localStorage.getItem(storageKey)) || {
-    log_url: urls.log_url,
-    registrar_url: urls.registrar_url,
-    ballot_box_url: location.origin,
-    provider: params.get('provider') || undefined,
     election_id: btoa(String.fromCharCode(...id.match(/../g).map((h) => parseInt(h, 16)))),
   };
+  // The URLs are the ballot box's, on every load: a state that an older page
+  // saved must not keep sending the voter to servers that the link named.
+  state.log_url = urls.log_url;
+  state.registrar_url = urls.registrar_url;
+  state.ballot_box_url = location.origin;
+  state.provider = params.get('provider') || state.provider;
   try {
     const go = new Go();
     const wasm = await WebAssembly.instantiateStreaming(fetch('stimmig.wasm'), go.importObject);

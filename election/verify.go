@@ -42,6 +42,9 @@ type Report struct {
 	// Ballots holds the ballot entries and BallotIndexes their log indexes.
 	Ballots       []Ballot
 	BallotIndexes []uint64
+	// RollReferences are the references of the roll, and IssuedReferences
+	// those with an issuance entry.
+	RollReferences, IssuedReferences [][]byte
 	// ElectionPrivateKey is the published private key, once it is logged.
 	ElectionPrivateKey []byte
 }
@@ -143,6 +146,7 @@ func (v *verifier) entry(log *publog.Report, index uint64, typ string, body []by
 			v.roll[merkle.Hash(ref)] = false
 		}
 		v.rep.Eligible = uint64(len(roll.References))
+		v.rep.RollReferences = roll.References
 		v.rep.Phase = PhaseRegistration
 
 	case publog.TypeIssuance:
@@ -165,6 +169,7 @@ func (v *verifier) entry(log *publog.Report, index uint64, typ string, body []by
 			return fmt.Errorf("sequence number %d, want %d", iss.Sequence, v.rep.Issued)
 		}
 		v.roll[ref] = true
+		v.rep.IssuedReferences = append(v.rep.IssuedReferences, iss.RollReference)
 		v.rep.Issued++
 
 	case publog.TypeRegistrationClose:

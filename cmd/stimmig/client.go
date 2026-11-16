@@ -89,9 +89,18 @@ func runClient(args []string, stdout, stderr io.Writer) int {
 			if err := readJSON(*statePath, &st); err != nil {
 				return err
 			}
-			err := client.Cast(ctx, &st, client.ParseRanking(*ranking))
-			// Store the state also after a failure: it may hold the ballot
-			// that must be sent again.
+			// The ballot is stored before it leaves: the ballot box may receive
+			// it although the answer is lost, and then only this ballot can be
+			// sent again.
+			if err := client.Prepare(ctx, &st, client.ParseRanking(*ranking)); err != nil {
+				return err
+			}
+			if err := saveState(*statePath, &st); err != nil {
+				return err
+			}
+			err := client.Send(ctx, &st)
+			// Store the state also after a failure: a refusal deletes the
+			// ballot, an error without an answer keeps it.
 			if saveErr := saveState(*statePath, &st); saveErr != nil {
 				return saveErr
 			}

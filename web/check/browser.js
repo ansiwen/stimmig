@@ -25,7 +25,7 @@ const assert = (cond, msg) => { if (!cond) throw new Error('FAILED: ' + msg); co
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
   const problems = [];
-  page.on('console', (m) => { if (m.type() === 'error' && !/40[49]/.test(m.text())) problems.push(m.text()); });
+  page.on('console', (m) => { if (m.type() === 'error' && !/40[49]|425/.test(m.text())) problems.push(m.text()); });
   page.on('response', (r) => { if (r.status() >= 400) console.log('http', r.status(), r.url().slice(0, 70)); });
   page.on('pageerror', (e) => problems.push(String(e)));
   // A link may not change where the page registers: it names another
@@ -64,16 +64,12 @@ const assert = (cond, msg) => { if (!cond) throw new Error('FAILED: ' + msg); co
   assert(/^\d{4} \d{4}$/.test(code1), 'the page shows a confirmation code');
   assert((await typeCode(link, '0000 0000')) === 403, 'a wrong confirmation code is refused');
   assert((await typeCode(link, code1)) === 200, 'the login link and the code issue the credential');
-  // Reload before the page has fetched the credential: the registration must resume.
+  // Reload before the page has fetched the credential: the registration
+  // resumes with the same session and fetches the credential at once.
   await page.reload();
   await page.waitForSelector('#register:not([hidden])', { timeout: 60000 });
-  await page.click('#begin'); // continues the pending registration with a new session
-  await page.waitForSelector('#login:not([hidden])');
-  const loginURL2 = await page.getAttribute('#login-link', 'href');
-  const before2 = fs.readFileSync(dir + '/reg.err', 'utf8').length;
-  await fetch(loginURL2, { method: 'POST', body: new URLSearchParams({ state: new URL(loginURL2).searchParams.get('state'), address: 'ada@example.org' }) });
-  const link2 = fs.readFileSync(dir + '/reg.err', 'utf8').slice(before2).match(/http:\/\/\S+callback\S+/)[0];
-  assert((await typeCode(link2, await page.textContent('#login-code'))) === 200, 'the second login returns the same credential');
+  await page.click('#begin');
+  assert((await page.textContent('#login-code')) === code1, 'a reload continues the same session and code');
   await page.waitForSelector('#vote:not([hidden])', { timeout: 30000 });
   assert(true, 'the registration resumed after a reload');
 

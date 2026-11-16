@@ -94,14 +94,18 @@ func main() {
 	}))
 	// The second argument is the ranking as JSON text: an array of rank
 	// groups, each an array of candidate IDs.
-	g.Set("stimmigCast", async(func(ctx context.Context, st *client.State, args []js.Value) (any, error) {
+	g.Set("stimmigPrepare", async(func(ctx context.Context, st *client.State, args []js.Value) (any, error) {
 		var ranking tally.Ballot
 		if len(args) == 0 || json.Unmarshal([]byte(args[0].String()), &ranking) != nil {
 			return nil, errors.New("the ranking is missing or malformed")
 		}
-		err := client.Cast(ctx, st, ranking)
-		// The state comes back also after a failure: it may hold the
-		// ballot that must be sent again.
+		// The page stores the state before it calls stimmigSend.
+		return withState{State: st}, client.Prepare(ctx, st, ranking)
+	}))
+	g.Set("stimmigSend", async(func(ctx context.Context, st *client.State, _ []js.Value) (any, error) {
+		err := client.Send(ctx, st)
+		// The state comes back also after a failure: a refusal has deleted
+		// the ballot, and an error without an answer keeps it.
 		return struct {
 			withState
 			Error string `json:"error,omitempty"`
