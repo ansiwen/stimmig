@@ -6,8 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
+	"os/signal"
+	"strconv"
+	"syscall"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver "pgx"
@@ -26,6 +30,7 @@ const serveHelp = `environment of the services:
   STIMMIG_DATABASE_URL     PostgreSQL URL of this service's database
   STIMMIG_LISTEN           listen address, default :8080
   STIMMIG_ADMIN_TOKEN      bearer token of this service's admin API
+  STIMMIG_DB_MAX_CONNS     size of the database pool, default 20
   STIMMIG_KEY_ENCRYPTION_KEY  64 hexadecimal characters; encrypts the private keys in the database
 log:
   STIMMIG_REGISTRAR_TOKEN  token with which the registrar appends
@@ -155,6 +160,15 @@ func serve(ctx context.Context, role string, stderr io.Writer) error {
 		return err
 	}
 	defer func() { _ = db.Close() }()
+	// A request can hold a connection while it waits for another service, so
+	// the pool is bounded below the database's limit.
+	maxConns := 20
+	if v := os.Getenv("STIMMIG_DB_MAX_CONNS"); v != "" {
+		if maxConns, err = strconv.Atoi(v); err != nil || maxConns < 2 {
+			return errors.New("STIMMIG_DB_MAX_CONNS must be a number of 2 or more")
+		}
+	}
+	db.SetMaxOpenConns(maxConns)
 	h, err := handler(db)
 	if err != nil {
 		return err
@@ -168,5 +182,37 @@ func serve(ctx context.Context, role string, stderr io.Writer) error {
 		WriteTimeout: 5 * time.Minute, IdleTimeout: 2 * time.Minute,
 	}
 	_, _ = fmt.Fprintf(stderr, "stimmig %s: listening on %s\n", role, listen)
-	return srv.ListenAndServe()
+	stop, cancel := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
+	defer cancel()
+	return listenAndServe(stop, srv, ShutdownGrace)
+}
+
+// ShutdownGrace is how long a service finishes the requests in flight after
+// SIGTERM. A registrar that is killed between the log and its database
+// leaves the log ahead of it (the next issuance catches up, but nothing
+// should rely on that).
+const ShutdownGrace = 45 * time.Second
+
+// listenAndServe serves until ctx ends, then lets the requests in flight
+// finish for at most grace.
+func listenAndServe(ctx context.Context, srv *http.Server, grace time.Duration) error {
+	ln, err := net.Listen("tcp", srv.Addr)
+	if err != nil {
+		return err
+	}
+	return listenAndServeOn(ctx, srv, ln, grace)
+}
+
+func listenAndServeOn(ctx context.Context, srv *http.Server, ln net.Listener, grace time.Duration) error {
+	done := make(chan error, 1)
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), grace)
+		defer cancel()
+		done <- srv.Shutdown(shutdownCtx)
+	}()
+	if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return <-done
 }

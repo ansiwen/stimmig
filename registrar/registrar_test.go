@@ -425,12 +425,75 @@ func TestMailLimit(t *testing.T) {
 	if link := e.login(second, "eve@example.org"); link != "" {
 		t.Fatal("mail to an address that is not on the roll")
 	}
+	// Only addresses on the roll have a row.
 	var n int
-	if err := e.db.QueryRow(`SELECT count(*) FROM reg_mail`).Scan(&n); err != nil || n != 2 {
+	if err := e.db.QueryRow(`SELECT count(*) FROM reg_mail`).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("%d limits, %v", n, err)
 	}
 	var key []byte
 	if err := e.db.QueryRow(`SELECT key FROM reg_mail LIMIT 1`).Scan(&key); err != nil || bytes.Contains(key, []byte("example.org")) {
 		t.Fatal("the limit keeps the address")
+	}
+}
+
+// If the registrar's transaction for one voter is lost after the log accepted
+// the entry (the process was killed), the next voter's issuance does not
+// fail: the registrar adopts the entry, and the first voter gets signed when
+// they log in again, without a second entry in the log.
+func TestCatchUpAfterALostTransaction(t *testing.T) {
+	e := setup(t)
+	roll := api.Roll{Voters: []api.Voter{
+		{Provider: "email", Subject: "ada@example.org"},
+		{Provider: "email", Subject: "bob@example.org"},
+	}}
+	if err := e.admin.Do(ctx, "PUT", e.electPath+"/roll", roll, nil); err != nil {
+		t.Fatal(err)
+	}
+	register := func(address string) (int, *credential.Request, api.Session) {
+		req, _, session, err := e.begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return open(t, e.login(session, address), session.Code), req, session
+	}
+	if code, _, _ := register("ada@example.org"); code != http.StatusOK {
+		t.Fatalf("ada: %d", code)
+	}
+	// The log holds ada's issuance; the registrar lost it.
+	for _, q := range []string{
+		`UPDATE reg_roll SET seq = NULL, blinded = NULL, blind_sig = NULL`,
+		`UPDATE reg_elections SET issued = 0, log_size = log_size - 1`,
+	} {
+		if _, err := e.db.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Bob is not stuck.
+	if code, _, _ := register("bob@example.org"); code != http.StatusOK {
+		t.Fatalf("bob after the lost transaction: %d", code)
+	}
+	if rep := e.report(); rep.Issued != 2 || rep.Log.Entries != 4 {
+		t.Fatalf("issued %d, %d entries", rep.Issued, rep.Log.Entries)
+	}
+	// Ada logs in again and gets her credential; nothing is logged twice.
+	code, req, session := register("ada@example.org")
+	if code != http.StatusOK {
+		t.Fatalf("ada again: %d", code)
+	}
+	var cred api.Credential
+	if err := e.voter.Do(ctx, "GET", "/v1/sessions/"+session.Session, nil, &cred); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := req.Finalize(cred.BlindSignature); err != nil {
+		t.Fatal(err)
+	}
+	if rep := e.report(); rep.Issued != 2 || rep.Log.Entries != 4 {
+		t.Fatalf("after ada's second login: issued %d, %d entries", rep.Issued, rep.Log.Entries)
+	}
+	if err := e.admin.Do(ctx, "POST", e.electPath+"/close", nil, nil); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if rep := e.report(); rep.Issued != 2 || rep.Phase != election.PhaseRegistrationClosed {
+		t.Fatalf("after the close: %+v", rep)
 	}
 }

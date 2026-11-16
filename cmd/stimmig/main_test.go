@@ -2,10 +2,15 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTallyCommand(t *testing.T) {
@@ -111,5 +116,50 @@ func TestServiceTokensMustDiffer(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if code := run([]string{"log"}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "must be different") {
 		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+}
+
+func TestListenAndServeFinishesRequestsInFlight(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	srv := &http.Server{
+		Addr: "127.0.0.1:0",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			close(started)
+			<-release
+			_, _ = w.Write([]byte("done"))
+		}),
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() { served <- listenAndServeOn(ctx, srv, ln, 5*time.Second) }()
+
+	body := make(chan string, 1)
+	go func() {
+		resp, err := http.Get("http://" + ln.Addr().String()) //nolint:noctx // test
+		if err != nil {
+			body <- err.Error()
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		b, _ := io.ReadAll(resp.Body)
+		body <- string(b)
+	}()
+	<-started
+	cancel() // SIGTERM
+	select {
+	case err := <-served:
+		t.Fatalf("stopped with a request in flight: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	if got := <-body; got != "done" {
+		t.Fatalf("response %q", got)
+	}
+	if err := <-served; err != nil {
+		t.Fatal(err)
 	}
 }

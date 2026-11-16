@@ -241,7 +241,7 @@ func (s *Server) logAppend(ctx context.Context, tx *sql.Tx, st state, records ..
 		}
 		done, checkErr := s.alreadyLogged(ctx, st.id, st.logSize, records)
 		if checkErr != nil || !done {
-			return fmt.Errorf("log: %w", err)
+			return fmt.Errorf("%w: log: %w", errLogBehind, err)
 		}
 	}
 	_, err := tx.ExecContext(ctx, `UPDATE reg_elections SET phase = $2, issued = $3, log_size = $4 WHERE id = $1`,
@@ -450,13 +450,22 @@ func (s *Server) session(ctx context.Context, q interface {
 const DefaultMailInterval = time.Minute
 
 // AllowMail reports whether the email provider may mail a login link to an
-// address for a registration session: at most one mail per address and
-// minute, and only to addresses on the roll. The limit counts every address,
-// so that it does not tell whether one is on the roll. It keeps a keyed
-// hash of the address, not the address.
+// address for a registration session: only to addresses on the roll, and at
+// most one mail per address and minute. It keeps a keyed hash of the
+// address, not the address.
+//
+// Anybody who knows an address on the roll can use up its minute by
+// posting it, and the voter then gets no mail in that minute. A limit per
+// address cannot avoid this and still stop the flooding of an address; put
+// a limit per client at the ingress to make it expensive.
 func (s *Server) AllowMail(ctx context.Context, session, provider, subject string) bool {
 	id, _, err := s.session(ctx, s.DB, session)
 	if err != nil {
+		return false
+	}
+	// Only addresses on the roll get a row, so that nobody can fill the
+	// table with strings of their own choosing.
+	if !s.Eligible(ctx, session, provider, subject) {
 		return false
 	}
 	interval := s.MailInterval
@@ -471,10 +480,8 @@ func (s *Server) AllowMail(ctx context.Context, session, provider, subject strin
 	if err != nil {
 		return false
 	}
-	if n, _ := res.RowsAffected(); n != 1 {
-		return false
-	}
-	return s.Eligible(ctx, session, provider, subject)
+	n, _ := res.RowsAffected()
+	return n == 1
 }
 
 // Eligible reports whether a subject is on the roll of the election of a
@@ -621,65 +628,170 @@ func (s *Server) confirm(w http.ResponseWriter, r *http.Request) {
 // repeating it for the same session changes nothing.
 func (s *Server) issue(ctx context.Context, session string, subject identity.Subject) (ref []byte, err error) {
 	err = api.InTx(ctx, s.DB, func(tx *sql.Tx) error {
-		id, blinded, err := s.session(ctx, tx, session)
-		if err != nil {
+		// A savepoint, so that the attempt can be undone if the log is ahead
+		// of the registrar and the registrar has to catch up first.
+		if _, err := tx.ExecContext(ctx, `SAVEPOINT issue`); err != nil {
 			return err
 		}
-		st, err := lock(ctx, tx, id)
-		if err != nil {
+		ref, err = s.issueOnce(ctx, tx, session, subject)
+		if !errors.Is(err, errLogBehind) {
 			return err
 		}
-		if st.phase != phaseOpen {
-			return api.Errorf(http.StatusConflict, "registration is not open")
+		if _, rbErr := tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT issue`); rbErr != nil {
+			return rbErr
 		}
-		ref = rollReference(st.salt, subject.Provider, subject.StableID)
-		var seq sql.NullInt64
-		var issuedFor []byte
-		err = tx.QueryRowContext(ctx, `SELECT seq, blinded FROM reg_roll WHERE election = $1 AND ref = $2`, id[:], ref).
-			Scan(&seq, &issuedFor)
-		if errors.Is(err, sql.ErrNoRows) {
-			return api.Errorf(http.StatusForbidden, "you are not on the electoral roll of this election")
+		id, _, sErr := s.session(ctx, tx, session)
+		if sErr != nil {
+			return sErr
 		}
-		if err != nil {
+		if adopted, cErr := s.catchUp(ctx, tx, id); cErr != nil || !adopted {
 			return err
 		}
-		if seq.Valid {
-			if !bytes.Equal(issuedFor, blinded) {
-				// Lost credentials are not reissued (SPEC.md section 5.1).
-				return api.Errorf(http.StatusConflict, "a credential was already issued for you")
-			}
-		} else {
-			var public, sealed []byte
-			if err := tx.QueryRowContext(ctx, `SELECT issuing_public, issuing_private FROM reg_keys WHERE election = $1`, id[:]).Scan(&public, &sealed); err != nil {
-				return err
-			}
-			private, err := s.sealer().Open(sealed, public)
-			if err != nil {
-				return err
-			}
-			key, err := x509.ParsePKCS1PrivateKey(private)
-			if err != nil {
-				return err
-			}
-			sig, err := credential.Issue(key, blinded)
-			if err != nil {
-				return api.Errorf(http.StatusBadRequest, "%v", err)
-			}
-			if _, err := tx.ExecContext(ctx,
-				`UPDATE reg_roll SET seq = $3, blinded = $4, blind_sig = $5 WHERE election = $1 AND ref = $2`,
-				id[:], ref, int64(st.issued), blinded, sig); err != nil { //nolint:gosec // counts fit in int64
-				return err
-			}
-			rec := publog.Record{Type: publog.TypeIssuance, Body: election.Issuance{RollReference: ref, Sequence: st.issued}}
-			st.issued++
-			if err := s.logAppend(ctx, tx, st, rec); err != nil {
-				return err
-			}
-		}
-		_, err = tx.ExecContext(ctx, `UPDATE reg_sessions SET ref = $2 WHERE id = $1`, session, ref)
+		ref, err = s.issueOnce(ctx, tx, session, subject)
 		return err
 	})
 	return ref, err
+}
+
+// errLogBehind reports that the log holds entries of the registrar that the
+// registrar's database does not.
+var errLogBehind = errors.New("registrar: the log is ahead of the registrar")
+
+// signBlinded signs a blinded credential with the issuing key of an election.
+func (s *Server) signBlinded(ctx context.Context, tx *sql.Tx, id merkle.Hash, blinded []byte) ([]byte, error) {
+	var public, sealed []byte
+	if err := tx.QueryRowContext(ctx, `SELECT issuing_public, issuing_private FROM reg_keys WHERE election = $1`, id[:]).Scan(&public, &sealed); err != nil {
+		return nil, err
+	}
+	private, err := s.sealer().Open(sealed, public)
+	if err != nil {
+		return nil, err
+	}
+	key, err := x509.ParsePKCS1PrivateKey(private)
+	if err != nil {
+		return nil, err
+	}
+	sig, err := credential.Issue(key, blinded)
+	if err != nil {
+		return nil, api.Errorf(http.StatusBadRequest, "%v", err)
+	}
+	return sig, nil
+}
+
+func (s *Server) issueOnce(ctx context.Context, tx *sql.Tx, session string, subject identity.Subject) (ref []byte, err error) {
+	id, blinded, err := s.session(ctx, tx, session)
+	if err != nil {
+		return nil, err
+	}
+	st, err := lock(ctx, tx, id)
+	if err != nil {
+		return nil, err
+	}
+	if st.phase != phaseOpen {
+		return nil, api.Errorf(http.StatusConflict, "registration is not open")
+	}
+	ref = rollReference(st.salt, subject.Provider, subject.StableID)
+	var seq sql.NullInt64
+	var issuedFor []byte
+	err = tx.QueryRowContext(ctx, `SELECT seq, blinded FROM reg_roll WHERE election = $1 AND ref = $2`, id[:], ref).
+		Scan(&seq, &issuedFor)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, api.Errorf(http.StatusForbidden, "you are not on the electoral roll of this election")
+	}
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case seq.Valid && issuedFor != nil:
+		if !bytes.Equal(issuedFor, blinded) {
+			// Lost credentials are not reissued (SPEC.md section 5.1).
+			return nil, api.Errorf(http.StatusConflict, "a credential was already issued for you")
+		}
+	case seq.Valid:
+		// The issuance is in the log, but the registrar lost the transaction
+		// that signed it (see catchUp). Sign now; nothing is logged again.
+		sig, err := s.signBlinded(ctx, tx, id, blinded)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE reg_roll SET blinded = $3, blind_sig = $4 WHERE election = $1 AND ref = $2`,
+			id[:], ref, blinded, sig); err != nil {
+			return nil, err
+		}
+	default:
+		sig, err := s.signBlinded(ctx, tx, id, blinded)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE reg_roll SET seq = $3, blinded = $4, blind_sig = $5 WHERE election = $1 AND ref = $2`,
+			id[:], ref, int64(st.issued), blinded, sig); err != nil { //nolint:gosec // counts fit in int64
+			return nil, err
+		}
+		rec := publog.Record{Type: publog.TypeIssuance, Body: election.Issuance{RollReference: ref, Sequence: st.issued}}
+		st.issued++
+		if err := s.logAppend(ctx, tx, st, rec); err != nil {
+			return nil, err
+		}
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE reg_sessions SET ref = $2 WHERE id = $1`, session, ref)
+	return ref, err
+}
+
+// catchUp adopts the issuance entries that the log holds beyond the size the
+// registrar stored. They are there when a transaction of the registrar was
+// lost after the log had accepted its entry, for example because the process
+// was killed. Without this, the next issuance of any other voter would be
+// refused, and so would the close of the registration. The entries must be
+// the next issuances, in order, for roll entries that have none yet; the
+// roll rows get their sequence numbers, and the voter that they belong to
+// gets signed when they log in again. It reports whether it adopted any.
+func (s *Server) catchUp(ctx context.Context, tx *sql.Tx, id merkle.Hash) (bool, error) {
+	st, err := lock(ctx, tx, id)
+	if err != nil {
+		return false, err
+	}
+	export, err := api.Export(ctx, s.Log, id)
+	if err != nil {
+		return false, err
+	}
+	var issuances []election.Issuance
+	rep, err := publog.Verify(bytes.NewReader(export), func(_ *publog.Report, index uint64, typ string, body []byte) error {
+		if index < st.logSize {
+			return nil
+		}
+		if typ != publog.TypeIssuance {
+			return fmt.Errorf("entry %d is a %s entry, not an issuance", index, typ)
+		}
+		var iss election.Issuance
+		if err := canon.UnmarshalStrict(body, &iss); err != nil {
+			return err
+		}
+		issuances = append(issuances, iss)
+		return nil
+	})
+	if err != nil || rep.ElectionID != id || len(issuances) == 0 {
+		return false, nil //nolint:nilerr // not adoptable: the caller reports the conflict
+	}
+	next := st.issued
+	for _, iss := range issuances {
+		if iss.Sequence != next {
+			return false, nil
+		}
+		res, err := tx.ExecContext(ctx,
+			`UPDATE reg_roll SET seq = $3 WHERE election = $1 AND ref = $2 AND seq IS NULL`,
+			id[:], iss.RollReference, int64(iss.Sequence)) //nolint:gosec // counts fit in int64
+		if err != nil {
+			return false, err
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			return false, nil
+		}
+		next++
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE reg_elections SET issued = $2, log_size = $3 WHERE id = $1`,
+		id[:], int64(st.issued)+int64(len(issuances)), int64(st.logSize)+int64(len(issuances))) //nolint:gosec // counts fit in int64
+	return err == nil, err
 }
 
 // credential returns the blind signature of a session after the login.
