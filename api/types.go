@@ -107,3 +107,17 @@ type ClientConfig struct {
 	LogURL       string `cbor:"log_url"`
 	RegistrarURL string `cbor:"registrar_url"`
 }
+
+// ElectionInfo is one entry of the registrar's list of elections.
+type ElectionInfo struct {
+	ID    []byte `cbor:"id"`
+	Title string `cbor:"title"`
+	// Phase is the registrar's phase: setup, open or closed.
+	Phase   string `cbor:"phase"`
+	Tallied bool   `cbor:"tallied"`
+}
+
+// ElectionList is the response of GET /v1/elections of the registrar.
+type ElectionList struct {
+	Elections []ElectionInfo `cbor:"elections"`
+}

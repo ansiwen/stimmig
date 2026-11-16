@@ -47,6 +47,9 @@ var schemaMail string
 //go:embed schema_tallied.sql
 var schemaTallied string
 
+//go:embed schema_created.sql
+var schemaCreated string
+
 // SessionValidity is how long a voter has to log in.
 const SessionValidity = time.Hour
 
@@ -60,6 +63,7 @@ const (
 //
 //	POST /v1/keys                     admin   create the keys of an election
 //	POST /v1/elections                admin   register an election by its manifest
+//	GET  /v1/elections                admin   list the elections, newest first
 //	PUT  /v1/elections/{id}/roll      admin   publish the roll, open registration
 //	POST /v1/elections/{id}/close     admin   close registration
 //	POST /v1/elections/{id}/tally     admin   publish key, plaintexts and result
@@ -93,7 +97,7 @@ func (s *Server) sealer() keystore.Sealer {
 
 // Init creates the tables if they are missing.
 func (s *Server) Init(ctx context.Context) error {
-	return api.Migrate(ctx, s.DB, "registrar", []string{schema, schemaMail, schemaTallied})
+	return api.Migrate(ctx, s.DB, "registrar", []string{schema, schemaMail, schemaTallied, schemaCreated})
 }
 
 // Handler returns the routes of the service.
@@ -101,6 +105,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/keys", s.admin(s.newKeys))
 	mux.HandleFunc("POST /v1/elections", s.admin(s.create))
+	mux.HandleFunc("GET /v1/elections", s.admin(s.list))
 	mux.HandleFunc("PUT /v1/elections/{id}/roll", s.admin(s.roll))
 	mux.HandleFunc("POST /v1/elections/{id}/close", s.admin(s.close))
 	mux.HandleFunc("POST /v1/elections/{id}/tally", s.admin(s.tally))
@@ -160,6 +165,30 @@ func (s *Server) newKeys(_ http.ResponseWriter, r *http.Request) (any, error) {
 		`INSERT INTO reg_keys (issuing_public, issuing_private, election_public, election_private) VALUES ($1, $2, $3, $4)`,
 		issuingPublic, issuingSealed, electionPublic, electionSealed)
 	return api.RegistrarKeys{IssuingKey: issuingPublic, IssuingKeyProof: proof, ElectionKey: electionPublic}, err
+}
+
+// list returns the elections of the registrar, newest first.
+func (s *Server) list(_ http.ResponseWriter, r *http.Request) (any, error) {
+	rows, err := s.DB.QueryContext(r.Context(), `SELECT id, manifest, phase, tallied FROM reg_elections ORDER BY created DESC, id`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	list := api.ElectionList{Elections: []api.ElectionInfo{}}
+	for rows.Next() {
+		var info api.ElectionInfo
+		var raw []byte
+		if err := rows.Scan(&info.ID, &raw, &info.Phase, &info.Tallied); err != nil {
+			return nil, err
+		}
+		var m publog.Manifest
+		if err := canon.Unmarshal(raw, &m); err != nil {
+			return nil, err
+		}
+		info.Title = m.Title
+		list.Elections = append(list.Elections, info)
+	}
+	return list, rows.Err()
 }
 
 func (s *Server) create(w http.ResponseWriter, r *http.Request) (any, error) {

@@ -1,25 +1,17 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"math/big"
-	"net/http"
 	"os"
 	"strings"
-	"time"
 
+	"github.com/ansiwen/stimmig/admin"
 	"github.com/ansiwen/stimmig/api"
-	"github.com/ansiwen/stimmig/merkle"
-	"github.com/ansiwen/stimmig/publog"
-	"github.com/ansiwen/stimmig/tally"
 )
 
 const adminHelp = `usage: stimmig admin <command> [flags]
@@ -35,47 +27,6 @@ environment:
   STIMMIG_LOG_URL, STIMMIG_REGISTRAR_URL, STIMMIG_BALLOTBOX_URL
   STIMMIG_LOG_ADMIN_TOKEN, STIMMIG_REGISTRAR_ADMIN_TOKEN, STIMMIG_BALLOTBOX_ADMIN_TOKEN`
 
-// definition is what the admin writes to define an election. The keys,
-// the nonce and the algorithms are added by "admin create".
-type definition struct {
-	Title       string         `json:"title"`
-	ReceiptMode string         `json:"receipt_mode"` // "full" (default) or "none"
-	Tally       tally.Manifest `json:"tally"`
-	// Schedule gives times in RFC 3339 at which the services close and open the
-	// phases by themselves; every time is optional.
-	Schedule struct {
-		RegistrationClose string `json:"registration_close"`
-		VotingOpen        string `json:"voting_open"`
-		VotingClose       string `json:"voting_close"`
-	} `json:"schedule"`
-}
-
-// schedule converts the times of a definition.
-func (d definition) schedule() (*publog.Schedule, error) {
-	var out publog.Schedule
-	for _, t := range []struct {
-		name, text string
-		to         *uint64
-	}{
-		{"registration_close", d.Schedule.RegistrationClose, &out.RegistrationClose},
-		{"voting_open", d.Schedule.VotingOpen, &out.VotingOpen},
-		{"voting_close", d.Schedule.VotingClose, &out.VotingClose},
-	} {
-		if t.text == "" {
-			continue
-		}
-		at, err := time.Parse(time.RFC3339, t.text)
-		if err != nil || at.Unix() <= 0 {
-			return nil, fmt.Errorf("schedule.%s: not a time in RFC 3339: %q", t.name, t.text)
-		}
-		*t.to = uint64(at.Unix()) //nolint:gosec // checked above
-	}
-	if out == (publog.Schedule{}) {
-		return nil, nil
-	}
-	return &out, out.Validate()
-}
-
 func runAdmin(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		_, _ = fmt.Fprintln(stderr, adminHelp)
@@ -90,9 +41,11 @@ func runAdmin(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	var e env
-	log := &api.Client{Base: e.get("STIMMIG_LOG_URL"), Token: e.get("STIMMIG_LOG_ADMIN_TOKEN")}
-	reg := &api.Client{Base: e.get("STIMMIG_REGISTRAR_URL"), Token: e.get("STIMMIG_REGISTRAR_ADMIN_TOKEN")}
-	box := &api.Client{Base: e.get("STIMMIG_BALLOTBOX_URL"), Token: e.get("STIMMIG_BALLOTBOX_ADMIN_TOKEN")}
+	c := &admin.Client{
+		Log:       &api.Client{Base: e.get("STIMMIG_LOG_URL"), Token: e.get("STIMMIG_LOG_ADMIN_TOKEN")},
+		Registrar: &api.Client{Base: e.get("STIMMIG_REGISTRAR_URL"), Token: e.get("STIMMIG_REGISTRAR_ADMIN_TOKEN")},
+		BallotBox: &api.Client{Base: e.get("STIMMIG_BALLOTBOX_URL"), Token: e.get("STIMMIG_BALLOTBOX_ADMIN_TOKEN")},
+	}
 	if len(e.missing) > 0 {
 		_, _ = fmt.Fprintf(stderr, "stimmig admin: missing environment variables %v\n", e.missing)
 		return 2
@@ -100,7 +53,11 @@ func runAdmin(args []string, stdout, stderr io.Writer) int {
 	ctx := context.Background()
 	err := func() error {
 		if args[0] == "create" {
-			id, err := adminCreate(ctx, log, reg, box, *definitionPath)
+			var def admin.Definition
+			if err := readJSON(*definitionPath, &def); err != nil {
+				return err
+			}
+			id, err := c.Create(ctx, def)
 			if err == nil {
 				_, _ = fmt.Fprintln(stdout, hex.EncodeToString(id[:]))
 			}
@@ -110,26 +67,30 @@ func runAdmin(args []string, stdout, stderr io.Writer) int {
 		if err != nil {
 			return fmt.Errorf("-election: %w", err)
 		}
-		path := api.ElectionPath(id)
 		switch args[0] {
 		case "roll":
-			roll, err := readVoters(*votersPath)
+			text, err := os.ReadFile(*votersPath) //nolint:gosec // the path is given by the operator on the command line
 			if err != nil {
 				return err
 			}
-			if err := reg.Do(ctx, "PUT", path+"/roll", roll, nil); err != nil {
+			roll, err := admin.ParseVoters(string(text))
+			if err != nil {
 				return err
 			}
-			return warnFingerprint(ctx, log, id, len(roll.Voters), stderr)
+			warning, err := c.Roll(ctx, id, roll)
+			if warning != "" {
+				_, _ = fmt.Fprintln(stderr, "warning: "+warning)
+			}
+			return err
 		case "close-registration":
-			return reg.Do(ctx, "POST", path+"/close", nil, nil)
+			return c.CloseRegistration(ctx, id)
 		case "open-voting":
-			return box.Do(ctx, "POST", path+"/open", nil, nil)
+			return c.OpenVoting(ctx, id)
 		case "close-voting":
-			return box.Do(ctx, "POST", path+"/close", nil, nil)
+			return c.CloseVoting(ctx, id)
 		case "tally":
-			var res tally.Result
-			if err := reg.Do(ctx, "POST", path+"/tally", nil, &res); err != nil {
+			res, err := c.Tally(ctx, id)
+			if err != nil {
 				return err
 			}
 			_, _ = fmt.Fprintf(stdout, "winners: %s\n", strings.Join(res.Winners, ", "))
@@ -145,112 +106,4 @@ func runAdmin(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
-}
-
-// adminCreate collects the public keys of the three services, builds the
-// manifest and registers the election with each service.
-func adminCreate(ctx context.Context, log, reg, box *api.Client, definitionPath string) (merkle.Hash, error) {
-	var def definition
-	if err := readJSON(definitionPath, &def); err != nil {
-		return merkle.Hash{}, err
-	}
-	if def.ReceiptMode == "" {
-		def.ReceiptMode = publog.ReceiptFull
-	}
-	m := publog.Manifest{
-		Version:     publog.ManifestVersion,
-		Title:       def.Title,
-		Nonce:       make([]byte, 16),
-		Tally:       def.Tally,
-		Algorithms:  publog.DefaultAlgorithms(def.ReceiptMode),
-		ReceiptMode: def.ReceiptMode,
-	}
-	if _, err := rand.Read(m.Nonce); err != nil {
-		return merkle.Hash{}, err
-	}
-	var err error
-	if m.Schedule, err = def.schedule(); err != nil {
-		return merkle.Hash{}, err
-	}
-	// Check the definition before any service creates keys for it.
-	if err := m.Tally.Validate(); err != nil {
-		return merkle.Hash{}, err
-	}
-	var logKey api.LogKey
-	if err := log.Do(ctx, "POST", "/v1/keys", nil, &logKey); err != nil {
-		return merkle.Hash{}, fmt.Errorf("log: %w", err)
-	}
-	var regKeys api.RegistrarKeys
-	if err := reg.Do(ctx, "POST", "/v1/keys", nil, &regKeys); err != nil {
-		return merkle.Hash{}, fmt.Errorf("registrar: %w", err)
-	}
-	m.LogKey, m.IssuingKey, m.IssuingKeyProof, m.ElectionKey = logKey.LogKey, regKeys.IssuingKey, regKeys.IssuingKeyProof, regKeys.ElectionKey
-	if def.ReceiptMode == publog.ReceiptFull {
-		var boxKey api.BallotBoxKey
-		if err := box.Do(ctx, "POST", "/v1/keys", nil, &boxKey); err != nil {
-			return merkle.Hash{}, fmt.Errorf("ballot box: %w", err)
-		}
-		m.ReceiptKey = boxKey.ReceiptKey
-	}
-	// The hash of the voting client, if the ballot box serves one.
-	var bundle api.ClientBundle
-	if err := box.Do(ctx, "GET", "/v1/client", nil, &bundle); err == nil {
-		m.ClientHash = bundle.Hash
-	} else if !api.IsStatus(err, http.StatusNotFound) {
-		return merkle.Hash{}, fmt.Errorf("ballot box: %w", err)
-	}
-	var head publog.TreeHead
-	if err := log.Do(ctx, "POST", "/v1/elections", m, &head); err != nil {
-		return merkle.Hash{}, fmt.Errorf("log: %w", err)
-	}
-	if err := reg.Do(ctx, "POST", "/v1/elections", m, nil); err != nil {
-		return merkle.Hash{}, fmt.Errorf("registrar: %w", err)
-	}
-	if err := box.Do(ctx, "POST", "/v1/elections", m, nil); err != nil {
-		return merkle.Hash{}, fmt.Errorf("ballot box: %w", err)
-	}
-	return merkle.Hash(head.ElectionID), nil
-}
-
-func readVoters(path string) (api.Roll, error) {
-	var roll api.Roll
-	f, err := os.Open(path) //nolint:gosec // the path is given by the operator on the command line
-	if err != nil {
-		return roll, err
-	}
-	defer func() { _ = f.Close() }()
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if subject, ok := strings.CutPrefix(line, "oidc:"); ok {
-			roll.Voters = append(roll.Voters, api.Voter{Provider: "oidc", Subject: subject})
-		} else if line != "" {
-			// The email provider reports addresses in lower case.
-			roll.Voters = append(roll.Voters, api.Voter{Provider: "email", Subject: strings.ToLower(line)})
-		}
-	}
-	return roll, sc.Err()
-}
-
-// warnFingerprint warns when the election allows more different ballots
-// than it has voters: a ranking can then work as a fingerprint that
-// identifies a ballot (SPEC.md section 2).
-func warnFingerprint(ctx context.Context, log *api.Client, id merkle.Hash, voters int, stderr io.Writer) error {
-	export, err := api.Export(ctx, log, id)
-	if err != nil {
-		return err
-	}
-	rep, err := publog.Verify(bytes.NewReader(export), nil)
-	if err != nil {
-		return err
-	}
-	possible, err := rep.Manifest.Tally.PossibleBallots()
-	if err != nil {
-		return err
-	}
-	if possible.Cmp(big.NewInt(int64(voters))) > 0 {
-		_, _ = fmt.Fprintf(stderr, "warning: %s different ballots are possible, but only %d voters are eligible. "+
-			"A voter can make a ballot recognisable by an unusual ranking. Consider a lower max_ranks.\n", possible, voters)
-	}
-	return nil
 }

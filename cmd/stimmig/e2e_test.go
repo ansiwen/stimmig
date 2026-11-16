@@ -14,9 +14,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ansiwen/stimmig/admin"
 	"github.com/ansiwen/stimmig/api"
 	"github.com/ansiwen/stimmig/ballotbox"
 	"github.com/ansiwen/stimmig/client"
+	"github.com/ansiwen/stimmig/election"
 	"github.com/ansiwen/stimmig/identity"
 	"github.com/ansiwen/stimmig/internal/testdb"
 	"github.com/ansiwen/stimmig/internal/testkit"
@@ -210,6 +212,24 @@ func TestElectionFromCommandLine(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("verify output lacks %q:\n%s", want, out)
 		}
+	}
+
+	// The admin package reports the state from the verified log, and the
+	// registrar lists its elections.
+	ac := &admin.Client{
+		Log: &api.Client{Base: logSrv.URL, Token: "la"}, Registrar: &api.Client{Base: regSrv.URL, Token: "ra"}, BallotBox: &api.Client{Base: boxSrv.URL, Token: "ba"},
+	}
+	hash, err := api.ParseHash(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := ac.Status(ctx, hash)
+	if err != nil || st.Phase != election.PhaseComplete || st.Eligible != 3 || st.Cast != 2 || st.Result == nil || st.PossibleBallots != "19" {
+		t.Fatalf("status: %+v, %v", st, err)
+	}
+	list, err := ac.List(ctx)
+	if err != nil || len(list) != 1 || list[0].Title != "Board election" || !list[0].Tallied {
+		t.Fatalf("list: %+v, %v", list, err)
 	}
 
 	// An election that the schedule drives: the services close and open the
