@@ -203,3 +203,27 @@ func TestUnmarshalStrict(t *testing.T) {
 		t.Error("item with an explicit zero value accepted")
 	}
 }
+
+func TestNilContainersAreEmpty(t *testing.T) {
+	type s struct {
+		List []string `cbor:"list"`
+		Data []byte   `cbor:"data"`
+	}
+	data, err := Marshal(s{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hex.EncodeToString(data) != "a2"+"64"+"64617461"+"40"+"64"+"6c697374"+"80" {
+		t.Fatalf("nil containers encode as %x", data)
+	}
+	// An item that has null where the struct has an array is not accepted:
+	// it would be a second encoding of the empty list.
+	null, _ := Marshal(map[string]any{"list": nil, "data": []byte{}})
+	var out s
+	if err := UnmarshalStrict(null, &out); err == nil {
+		t.Fatal("null accepted for an array")
+	}
+	if err := UnmarshalStrict(data, &out); err != nil {
+		t.Fatal(err)
+	}
+}

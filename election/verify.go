@@ -93,6 +93,7 @@ type verifier struct {
 	lastLeaf    merkle.Hash
 	plains      uint64
 	rankings    []tally.Ballot
+	rankingAt   []uint64 // log index of the ballot of each ranking
 }
 
 // follows lists, for every entry type, the types that may come directly
@@ -248,6 +249,7 @@ func (v *verifier) entry(log *publog.Report, index uint64, typ string, body []by
 		}
 		if want.Ranking != nil {
 			v.rankings = append(v.rankings, *want.Ranking)
+			v.rankingAt = append(v.rankingAt, want.Ballot)
 		} else {
 			v.rep.Undecryptable++
 		}
@@ -257,7 +259,7 @@ func (v *verifier) entry(log *publog.Report, index uint64, typ string, body []by
 		if v.plains != v.rep.Cast {
 			return fmt.Errorf("%d ballot_plain entries for %d ballots", v.plains, v.rep.Cast)
 		}
-		res, err := tally.Tally(log.Manifest.Tally, v.rankings)
+		res, err := runTally(log.Manifest.Tally, v.rankings, v.rankingAt)
 		if err != nil {
 			return err
 		}

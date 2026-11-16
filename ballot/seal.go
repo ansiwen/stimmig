@@ -162,7 +162,8 @@ func Open(electionID merkle.Hash, private []byte, credentialKey ed25519.PublicKe
 		return nil, ErrDecrypt
 	}
 	ranking := tally.Ballot{}
-	if err := canon.Unmarshal(plain, &ranking); err != nil || ranking == nil {
+	// Strict: a null inside a rank group would decode to the empty name.
+	if err := canon.UnmarshalStrict(plain, &ranking); err != nil || ranking == nil {
 		return nil, ErrMalformed
 	}
 	for _, group := range ranking {

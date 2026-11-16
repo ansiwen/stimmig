@@ -144,6 +144,7 @@ func TestOpenMalformed(t *testing.T) {
 		"text":             enc("A"),
 		"flat array":       enc([]string{"A"}),
 		"null group":       enc([]any{nil}),
+		"null candidate":   enc([][]any{{"A", nil}}),
 		"number candidate": enc([][]int{{1}}),
 		"map":              enc(map[string]int{"A": 1}),
 		"empty plaintext":  {},

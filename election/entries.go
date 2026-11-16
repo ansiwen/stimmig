@@ -227,6 +227,7 @@ func TallyRecords(m publog.Manifest, electionID merkle.Hash, private []byte, bal
 	}
 	records := []publog.Record{{Type: publog.TypeElectionKey, Body: KeyRelease{PrivateKey: private}}}
 	var rankings []tally.Ballot
+	var rankingIndexes []uint64
 	for i, b := range ballots {
 		plain, err := openBallot(electionID, private, indexes[i], b)
 		if err != nil {
@@ -235,9 +236,10 @@ func TallyRecords(m publog.Manifest, electionID merkle.Hash, private []byte, bal
 		records = append(records, publog.Record{Type: publog.TypeBallotPlain, Body: plain})
 		if plain.Ranking != nil {
 			rankings = append(rankings, *plain.Ranking)
+			rankingIndexes = append(rankingIndexes, indexes[i])
 		}
 	}
-	res, err := tally.Tally(m.Tally, rankings)
+	res, err := runTally(m.Tally, rankings, rankingIndexes)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -278,4 +280,19 @@ func PublishTally(ctx context.Context, l *publog.Log, m publog.Manifest, private
 	}
 	_, err = l.AppendAll(ctx, -1, records)
 	return res, err
+}
+
+// runTally tallies the decrypted rankings. The ballots that the tally finds
+// invalid are named by the log index of their ballot entry, so that a reader
+// can find them in the log; the tally itself counts positions in the list it
+// was given.
+func runTally(m tally.Manifest, rankings []tally.Ballot, logIndexes []uint64) (*tally.Result, error) {
+	res, err := tally.Tally(m, rankings)
+	if err != nil {
+		return nil, err
+	}
+	for i := range res.Invalid {
+		res.Invalid[i].Index = int(logIndexes[res.Invalid[i].Index]) //nolint:gosec // a log index fits in int
+	}
+	return res, nil
 }

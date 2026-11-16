@@ -30,6 +30,8 @@ var (
 func init() {
 	enc := cbor.CoreDetEncOptions()
 	enc.Time = cbor.TimeUnix
+	// A nil slice is an empty array, not null: an array has one encoding.
+	enc.NilContainers = cbor.NilContainerAsEmpty
 	enc.BigIntConvert = cbor.BigIntConvertShortest
 	var err error
 	if encMode, err = enc.EncMode(); err != nil {

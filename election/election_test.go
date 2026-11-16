@@ -10,6 +10,7 @@ import (
 	"flag"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -258,6 +259,10 @@ func TestElectionEndToEnd(t *testing.T) {
 	}
 	if len(res.Invalid) != 1 || !strings.Contains(res.Invalid[0].Reason, "3 ranks") {
 		t.Fatalf("invalid: %+v", res.Invalid)
+	}
+	// The index is that of the ballot entry in the log.
+	if !slices.Contains(rep.BallotIndexes, uint64(res.Invalid[0].Index)) {
+		t.Fatalf("invalid ballot index %d is not a ballot entry of the log: %v", res.Invalid[0].Index, rep.BallotIndexes)
 	}
 	if !reflect.DeepEqual(res, e.result) {
 		t.Fatal("verified result differs from the published result")
@@ -522,6 +527,7 @@ func TestVerifyRejects(t *testing.T) {
 		"plaintexts swapped":       {swap(iPlain, iPlain+1), "does not match the decryption"},
 		"plaintext missing":        {cut(iPlain+5, iPlain+6), "5 ballot_plain entries for 6 ballots"},
 		"plaintext extra":          {insert(iResult, good[iPlain]), "more ballot_plain entries than ballots"},
+		"null roll":                {set(iRoll, publog.TypeRollCommit, map[string]any{"references": nil}), "not the encoding"},
 		"wrong result":             {set(iResult, publog.TypeResult, res), "differs from the recomputed tally"},
 		"entry after result":       {append(append([]rec(nil), good...), good[iResult]), "must not follow a result entry"},
 		"unknown field":            {set(iRegClose, publog.TypeRegistrationClose, map[string]int{"issued": 7, "extra": 1}), "unknown field"},
