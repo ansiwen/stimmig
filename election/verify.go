@@ -71,7 +71,7 @@ type Report struct {
 func Verify(r io.Reader, visit func(index uint64, typ string, body []byte) error) (*Report, error) {
 	v := &verifier{rep: &Report{Phase: PhaseSetup}}
 	logRep, err := publog.Verify(r, func(rep *publog.Report, index uint64, typ string, body []byte) error {
-		if err := v.entry(rep, index, typ, body); err != nil {
+		if err := v.entry(rep.ElectionID, &rep.Manifest, rep.Leaves[index], index, typ, body); err != nil {
 			return err
 		}
 		if visit != nil {
@@ -119,15 +119,16 @@ func Follows(prev, typ string) bool {
 	return slices.Contains(follows[prev], typ)
 }
 
-func (v *verifier) entry(log *publog.Report, index uint64, typ string, body []byte) error {
+// entry checks the entry with the given index, whose leaf hash is leaf,
+// against the entries before it.
+func (v *verifier) entry(id merkle.Hash, m *publog.Manifest, leaf merkle.Hash, index uint64, typ string, body []byte) error {
 	if index > 0 && !Follows(v.last, typ) {
 		return fmt.Errorf("must not follow a %s entry", v.last)
 	}
 	v.last = typ
-	id := log.ElectionID
 	switch typ {
 	case publog.TypeManifest:
-		key, err := credential.ParseIssuingKey(log.Manifest.IssuingKey)
+		key, err := credential.ParseIssuingKey(m.IssuingKey)
 		if err != nil {
 			return err
 		}
@@ -203,7 +204,6 @@ func (v *verifier) entry(log *publog.Report, index uint64, typ string, body []by
 		}
 		v.credentials[cred] = true
 		// The leaf of the logged entry, not of a re-encoding of it.
-		leaf := log.Leaves[index]
 		if len(v.rep.Ballots) > 0 && bytes.Compare(v.lastLeaf[:], leaf[:]) >= 0 {
 			return errors.New("ballots are not ordered by leaf hash")
 		}
@@ -231,7 +231,7 @@ func (v *verifier) entry(log *publog.Report, index uint64, typ string, body []by
 		if err := canon.UnmarshalStrict(body, &k); err != nil {
 			return err
 		}
-		if err := ballot.MatchElectionKey(log.Manifest.ElectionKey, k.PrivateKey); err != nil {
+		if err := ballot.MatchElectionKey(m.ElectionKey, k.PrivateKey); err != nil {
 			return err
 		}
 		v.rep.ElectionPrivateKey = k.PrivateKey
@@ -264,7 +264,7 @@ func (v *verifier) entry(log *publog.Report, index uint64, typ string, body []by
 		if v.plains != v.rep.Cast {
 			return fmt.Errorf("%d ballot_plain entries for %d ballots", v.plains, v.rep.Cast)
 		}
-		res, err := runTally(log.Manifest.Tally, v.rankings, v.rankingAt)
+		res, err := runTally(m.Tally, v.rankings, v.rankingAt)
 		if err != nil {
 			return err
 		}
@@ -278,6 +278,42 @@ func (v *verifier) entry(log *publog.Report, index uint64, typ string, body []by
 		v.rep.Result = res
 		v.rep.Phase = PhaseComplete
 	}
+	return nil
+}
+
+// Checker checks the entries of one election as they are appended, with the
+// checks of Verify. The log service runs it before it signs a tree head, so
+// that a writer cannot put an entry in the log that makes the log fail
+// verification for good.
+type Checker struct {
+	id       merkle.Hash
+	manifest publog.Manifest
+	v        verifier
+	size     uint64
+}
+
+// NewChecker returns a checker for the log that holds the manifest as its
+// only entry.
+func NewChecker(id merkle.Hash, m publog.Manifest) (*Checker, error) {
+	key, err := credential.ParseIssuingKey(m.IssuingKey)
+	if err != nil {
+		return nil, err
+	}
+	return &Checker{id: id, manifest: m, size: 1,
+		v: verifier{rep: &Report{Phase: PhaseSetup}, last: publog.TypeManifest, issuingKey: key}}, nil
+}
+
+// Size is the number of entries that the checker has accepted, the
+// manifest included.
+func (c *Checker) Size() uint64 { return c.size }
+
+// Check checks the next entry, whose leaf hash is leaf. After an error the
+// checker is in an undefined state and must be discarded.
+func (c *Checker) Check(leaf merkle.Hash, typ string, body []byte) error {
+	if err := c.v.entry(c.id, &c.manifest, leaf, c.size, typ, body); err != nil {
+		return fmt.Errorf("entry %d (%s): %w", c.size, typ, err)
+	}
+	c.size++
 	return nil
 }
 

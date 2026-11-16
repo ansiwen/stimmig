@@ -629,3 +629,53 @@ func TestVerifyRejectsOtherEncodingsOfABallot(t *testing.T) {
 		}
 	}
 }
+
+// The Checker accepts the entries of a complete election one by one, and
+// refuses a ballot with a wrong signature, as the verifier does.
+func TestChecker(t *testing.T) {
+	e := runElection(t)
+	id := e.log.ElectionID()
+	good := entries(t, e.log)
+	feed := func(recs []rec) error {
+		c, err := NewChecker(id, e.manifest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range recs {
+			data, err := publog.EncodeEntry(r.typ, r.body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, body, err := publog.DecodeEntry(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Check(merkle.LeafHash(data), r.typ, body); err != nil {
+				return err
+			}
+		}
+		if c.Size() != uint64(len(recs))+1 {
+			t.Fatalf("size %d", c.Size())
+		}
+		return nil
+	}
+	if err := feed(good); err != nil {
+		t.Fatal(err)
+	}
+	for i, r := range good {
+		if r.typ != publog.TypeBallot {
+			continue
+		}
+		var b Ballot
+		if err := canon.UnmarshalStrict(r.body.(canon.Raw), &b); err != nil {
+			t.Fatal(err)
+		}
+		b.Signature = bytes.Repeat([]byte{1}, len(b.Signature))
+		bad := append([]rec(nil), good...)
+		bad[i] = rec{r.typ, b}
+		if err := feed(bad[:i+1]); err == nil || !strings.Contains(err.Error(), "entry") {
+			t.Fatalf("ballot with a wrong signature: %v", err)
+		}
+		break
+	}
+}

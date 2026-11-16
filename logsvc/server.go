@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"sync"
 
 	"github.com/ansiwen/stimmig/api"
 	"github.com/ansiwen/stimmig/canon"
@@ -31,6 +32,10 @@ type Server struct {
 	// tally, BallotBoxToken those of the voting.
 	RegistrarToken string
 	BallotBoxToken string
+
+	// mu serialises appends, and guards checkers.
+	mu       sync.Mutex
+	checkers map[merkle.Hash]*election.Checker
 }
 
 // writers lists the entry types that each writer may append.
@@ -153,6 +158,7 @@ func (s *Server) appendEntries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	records := make([]publog.Record, len(req.Entries))
+	bodies := make([][]byte, len(req.Entries))
 	for i, e := range req.Entries {
 		typ, body, err := publog.DecodeEntry(e)
 		if err != nil {
@@ -168,6 +174,7 @@ func (s *Server) appendEntries(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		records[i] = publog.Record{Type: typ, Body: canon.Raw(body)}
+		bodies[i] = body
 	}
 	// The entries follow the lifecycle of an election, so that nobody who
 	// holds a writer token can make the log unverifiable by writing an
@@ -178,6 +185,9 @@ func (s *Server) appendEntries(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "expect_size is required", http.StatusBadRequest)
 		return
 	}
+	// One append at a time: the checks below and the append must see the same log.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	size, err := s.Store.Size(r.Context(), id)
 	if err != nil {
 		fail(w, err)
@@ -208,6 +218,20 @@ func (s *Server) appendEntries(w http.ResponseWriter, r *http.Request) {
 		}
 		prev = rec.Type
 	}
+	// The entries must also be valid in content: the checks of the verifier,
+	// so that a leaked writer token cannot make the log fail verification.
+	chk, err := s.checker(r.Context(), id, size)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	for i, e := range req.Entries {
+		if err := chk.Check(merkle.LeafHash(e), records[i].Type, bodies[i]); err != nil {
+			delete(s.checkers, id) // half checked
+			http.Error(w, "the entry is not valid in this log: "+err.Error(), http.StatusUnprocessableEntity)
+			return
+		}
+	}
 	signer, err := s.Store.Signer(r.Context(), id)
 	if err != nil {
 		fail(w, err)
@@ -216,8 +240,12 @@ func (s *Server) appendEntries(w http.ResponseWriter, r *http.Request) {
 	expect := int64(*req.ExpectSize) //nolint:gosec // log sizes fit in int64
 	h, err := publog.Open(s.Store, id, signer, nil).AppendAll(r.Context(), expect, records)
 	if err != nil {
+		delete(s.checkers, id) // it has seen entries that the log does not have
 		fail(w, err)
 		return
+	}
+	if records[len(records)-1].Type == publog.TypeResult {
+		delete(s.checkers, id) // the log is complete
 	}
 	api.Write(w, h)
 }

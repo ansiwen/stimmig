@@ -12,6 +12,7 @@ import (
 
 	"github.com/ansiwen/stimmig/api"
 	"github.com/ansiwen/stimmig/canon"
+	"github.com/ansiwen/stimmig/election"
 	"github.com/ansiwen/stimmig/internal/testdb"
 	"github.com/ansiwen/stimmig/internal/testkit"
 	"github.com/ansiwen/stimmig/merkle"
@@ -81,7 +82,16 @@ func TestLogService(t *testing.T) {
 
 	path := "/v1/elections/" + hex.EncodeToString(head.ElectionID)
 	one := uint64(1)
-	roll := api.Append{Entries: []canon.Raw{entry(t, publog.TypeRollCommit, map[string]int{})}, ExpectSize: &one}
+	// A roll of 20 voters, in ascending order.
+	refs := make([][]byte, 20)
+	for i := range refs {
+		refs[i] = bytes.Repeat([]byte{byte(i + 1)}, 32)
+	}
+	rollRecord, err := election.RollRecord(refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roll := api.Append{Entries: []canon.Raw{entry(t, rollRecord.Type, rollRecord.Body)}, ExpectSize: &one}
 
 	// Writers are limited to their entry types.
 	if err := public.Do(ctx, "POST", path+"/entries", roll, nil); !api.IsStatus(err, http.StatusUnauthorized) {
@@ -129,8 +139,32 @@ func TestLogService(t *testing.T) {
 	}
 
 	// An append that does not say which size it expects is refused.
-	if err := registrar.Do(ctx, "POST", path+"/entries", api.Append{Entries: []canon.Raw{entry(t, publog.TypeIssuance, map[string]int{})}}, nil); !api.IsStatus(err, http.StatusBadRequest) {
+	issuance := func(ref []byte, sequence uint64) canon.Raw {
+		return entry(t, publog.TypeIssuance, election.Issuance{RollReference: ref, Sequence: sequence})
+	}
+	two := uint64(2)
+	if err := registrar.Do(ctx, "POST", path+"/entries", api.Append{Entries: []canon.Raw{issuance(refs[0], 0)}}, nil); !api.IsStatus(err, http.StatusBadRequest) {
 		t.Fatalf("append without expect_size: %v", err)
+	}
+	// An entry must be valid in this log, so that a leaked writer token cannot
+	// make the log fail verification: a voter who is not on the roll, a wrong
+	// sequence number, an entry that is not an issuance in disguise.
+	for name, bad := range map[string]canon.Raw{
+		"unknown voter":   issuance(bytes.Repeat([]byte{99}, 32), 0),
+		"wrong sequence":  issuance(refs[0], 5),
+		"empty issuance":  entry(t, publog.TypeIssuance, map[string]int{}),
+		"short reference": issuance([]byte{1}, 0),
+	} {
+		if err := registrar.Do(ctx, "POST", path+"/entries", api.Append{Entries: []canon.Raw{bad}, ExpectSize: &two}, nil); !api.IsStatus(err, http.StatusUnprocessableEntity) {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	// A batch is checked as a whole: the second entry reuses the voter.
+	if err := registrar.Do(ctx, "POST", path+"/entries", api.Append{Entries: []canon.Raw{issuance(refs[0], 0), issuance(refs[0], 1)}, ExpectSize: &two}, nil); !api.IsStatus(err, http.StatusUnprocessableEntity) {
+		t.Fatalf("second credential for a voter: %v", err)
+	}
+	if err := public.Do(ctx, "GET", path+"/head", nil, &head); err != nil || head.Size != 2 {
+		t.Fatalf("refused entries changed the log: %+v, %v", head, err)
 	}
 	// Concurrent writers that retry on a conflict all land, in some order.
 	var wg sync.WaitGroup
@@ -144,7 +178,8 @@ func TestLogService(t *testing.T) {
 					t.Error(err)
 					return
 				}
-				req := api.Append{Entries: []canon.Raw{entry(t, publog.TypeIssuance, map[string]int{"sequence": i})}, ExpectSize: &h.Size}
+				// The log has the manifest and the roll, then one entry per credential.
+				req := api.Append{Entries: []canon.Raw{issuance(refs[i], h.Size-2)}, ExpectSize: &h.Size}
 				err := registrar.Do(ctx, "POST", path+"/entries", req, nil)
 				if err == nil {
 					return
@@ -219,6 +254,32 @@ func TestLogService(t *testing.T) {
 	}
 	if err := public.Do(ctx, "GET", path+"/consistency?old=x&new=22", nil, nil); !api.IsStatus(err, http.StatusBadRequest) {
 		t.Fatalf("malformed sizes: %v", err)
+	}
+
+	// Another replica, with its own memory of the log, appends. This one
+	// catches up from the store and still refuses what does not fit.
+	other2 := httptest.NewServer((&Server{Store: store, AdminToken: "a", RegistrarToken: "r", BallotBoxToken: "b"}).Handler())
+	defer other2.Close()
+	registrar2 := &api.Client{Base: other2.URL, Token: "r"}
+	size := uint64(22)
+	closeAt := func(c *api.Client, issued uint64) error {
+		return c.Do(ctx, "POST", path+"/entries", api.Append{Entries: []canon.Raw{entry(t, publog.TypeRegistrationClose, election.RegistrationClose{Issued: issued})}, ExpectSize: &size}, nil)
+	}
+	if err := closeAt(registrar2, 19); !api.IsStatus(err, http.StatusUnprocessableEntity) {
+		t.Fatalf("wrong issued count at the second replica: %v", err)
+	}
+	if err := closeAt(registrar2, 20); err != nil {
+		t.Fatal(err)
+	}
+	size = 23
+	votingClose := func(cast uint64) error {
+		return box.Do(ctx, "POST", path+"/entries", api.Append{Entries: []canon.Raw{entry(t, publog.TypeVotingClose, election.VotingClose{Cast: cast})}, ExpectSize: &size}, nil)
+	}
+	if err := votingClose(1); !api.IsStatus(err, http.StatusUnprocessableEntity) {
+		t.Fatalf("wrong cast count: %v", err)
+	}
+	if err := votingClose(0); err != nil {
+		t.Fatal(err)
 	}
 }
 
