@@ -95,17 +95,20 @@ jobs:
         run: web/check/run.sh
 
   model:
-    # Ubuntu 26.04 has no ocaml-nox; 24.04 is the release ProVerif was built on.
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
+    # ProVerif is built in a pinned Debian, so that a new Ubuntu on the runner
+    # (26.04 dropped ocaml-nox) does not break the job.
+    container:
+      image: debian:12-slim@sha256:e67eeead736ff7bbe258ef088bff683635c561b1fcfefad0806c1df4ab49ce0e
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      # Ubuntu has no ProVerif package, so build the release and check its hash.
+      # Debian has no ProVerif package, so build the release and check its hash.
       - name: Build ProVerif 2.05
         run: |
-          sudo apt-get update && sudo apt-get install -y ocaml-nox
+          apt-get update && apt-get install -y --no-install-recommends ocaml-nox curl ca-certificates
           curl -sSfL -o "$RUNNER_TEMP/pv.tgz" https://bblanche.gitlabpages.inria.fr/proverif/proverif2.05.tar.gz
           echo "4871f53c32ab4a04669a060c4886ba5d9080496963fb980a9a62d2c429ceabc4  $RUNNER_TEMP/pv.tgz" | sha256sum -c -
           tar xzf "$RUNNER_TEMP/pv.tgz" -C "$RUNNER_TEMP"
