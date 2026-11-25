@@ -248,7 +248,7 @@ func listenAndServe(ctx context.Context, srv *http.Server, grace time.Duration) 
 
 func listenAndServeOn(ctx context.Context, srv *http.Server, ln net.Listener, grace time.Duration) error {
 	done := make(chan error, 1)
-	go func() {
+	go func() { //nolint:gosec // ctx is done when this runs; the shutdown needs a context of its own
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), grace)
 		defer cancel()

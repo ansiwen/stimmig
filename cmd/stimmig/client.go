@@ -167,7 +167,7 @@ func saveState(path string, st *client.State) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = os.Remove(tmp.Name()) }() // after a successful rename it is gone
+	defer func() { _ = os.Remove(tmp.Name()) }() //nolint:gosec // our own temporary file; after a successful rename it is gone
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		return err
@@ -179,5 +179,5 @@ func saveState(path string, st *client.State) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	return os.Rename(tmp.Name(), path) //nolint:gosec // the path is the voter's own -state flag
 }

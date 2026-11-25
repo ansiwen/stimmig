@@ -218,7 +218,7 @@ func proofChallenge(pub *rsa.PublicKey, i int) *big.Int {
 	for counter := 0; len(stream) < size; counter++ {
 		h := sha256.New()
 		h.Write([]byte("stimmig-issuing-key-proof-v1"))
-		h.Write([]byte{byte(i), byte(counter >> 8), byte(counter)})
+		h.Write([]byte{byte(i), byte(counter >> 8), byte(counter)}) //nolint:gosec // i is 0 to 7, and counter stays far below 2^16
 		h.Write(pub.N.Bytes())
 		stream = h.Sum(stream)
 	}

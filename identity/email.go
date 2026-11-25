@@ -208,7 +208,7 @@ func (e *Email) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// failure, would tell the voter whether the address is on the
 			// roll.
 			e.sending.Add(1)
-			go func() {
+			go func() { //nolint:gosec // detached from the request on purpose, see above
 				defer e.sending.Done()
 				ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 				defer cancel()
