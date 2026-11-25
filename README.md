@@ -15,7 +15,7 @@ The project follows the milestones of SPEC.md section 13.
 | M3: Cryptography | Done |
 | M4: Services | Done; see the open points in SPEC.md section 14 |
 | M5: Web client | Voting client and admin web page done |
-| M6: Deployment | Image, Helm chart and encrypted key store done; no PKCS#11 HSM |
+| M6: Deployment | Image, Helm chart, Docker Compose for one host and encrypted key store done; no PKCS#11 HSM |
 | M7: Identity | OpenID Connect done; ATProto not built |
 | M8: Review | Protocol model done (`model/`, ProVerif); no external review yet |
 
@@ -162,6 +162,11 @@ go run ./cmd/stimmig verify election.cbor
 The service interfaces are in [SPEC.md](SPEC.md) section 10.
 
 ## Deployment
+
+For a demo or a trial on one host with Docker, use
+[`deploy/compose`](deploy/compose/README.md): one command sets up the three
+services, the admin web page, PostgreSQL and HTTPS. For a real election, with
+separate operators, use the Helm chart:
 
 ```bash
 docker build -t stimmig .

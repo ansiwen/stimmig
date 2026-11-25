@@ -1,0 +1,120 @@
+# A small Stimmig installation on one host with Docker: the three services,
+# the admin web page, PostgreSQL and Caddy for HTTPS. For a demo or a trial,
+# not for an election that matters: all services share one host and one
+# operator, which SPEC.md section 2 counts on being separate. See README.md.
+name: stimmig
+
+x-service: &service
+  build:
+    context: ../..
+  image: stimmig:local
+  restart: unless-stopped
+  depends_on:
+    db:
+      condition: service_healthy
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  # Services finish requests in flight for up to 45 seconds after SIGTERM.
+  stop_grace_period: 60s
+
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD:?run setup.sh}
+      LOG_DB_PASSWORD: ${LOG_DB_PASSWORD:?run setup.sh}
+      REGISTRAR_DB_PASSWORD: ${REGISTRAR_DB_PASSWORD:?run setup.sh}
+      BALLOTBOX_DB_PASSWORD: ${BALLOTBOX_DB_PASSWORD:?run setup.sh}
+    volumes:
+      - db:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+      retries: 20
+
+  log:
+    <<: *service
+    command: ["log"]
+    environment:
+      STIMMIG_LISTEN: ":8080"
+      STIMMIG_DATABASE_URL: postgres://log:${LOG_DB_PASSWORD}@db/stimmig_log?sslmode=disable
+      STIMMIG_ADMIN_TOKEN: ${LOG_ADMIN_TOKEN}
+      STIMMIG_REGISTRAR_TOKEN: ${LOG_REGISTRAR_TOKEN}
+      STIMMIG_BALLOTBOX_TOKEN: ${LOG_BALLOTBOX_TOKEN}
+      STIMMIG_KEY_ENCRYPTION_KEY: ${LOG_KEY_ENCRYPTION_KEY}
+
+  registrar:
+    <<: *service
+    command: ["registrar"]
+    environment:
+      STIMMIG_LISTEN: ":8080"
+      STIMMIG_DATABASE_URL: postgres://registrar:${REGISTRAR_DB_PASSWORD}@db/stimmig_reg?sslmode=disable
+      STIMMIG_ADMIN_TOKEN: ${REGISTRAR_ADMIN_TOKEN}
+      STIMMIG_KEY_ENCRYPTION_KEY: ${REGISTRAR_KEY_ENCRYPTION_KEY}
+      STIMMIG_LOG_URL: http://log:8080
+      STIMMIG_LOG_TOKEN: ${LOG_REGISTRAR_TOKEN}
+      STIMMIG_PUBLIC_URL: https://registrar.${DOMAIN:?run setup.sh}
+      STIMMIG_EMAIL_SECRET: ${EMAIL_SECRET}
+      STIMMIG_SMTP_ADDR: ${SMTP_ADDR:-}
+      STIMMIG_SMTP_FROM: ${SMTP_FROM:-}
+      STIMMIG_SMTP_USERNAME: ${SMTP_USERNAME:-}
+      STIMMIG_SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      STIMMIG_PRINT_MAILS: ${PRINT_MAILS:-}
+      STIMMIG_OIDC_ISSUER: ${OIDC_ISSUER:-}
+      STIMMIG_OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      STIMMIG_OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+
+  ballotbox:
+    <<: *service
+    command: ["ballotbox"]
+    environment:
+      STIMMIG_LISTEN: ":8080"
+      STIMMIG_DATABASE_URL: postgres://ballotbox:${BALLOTBOX_DB_PASSWORD}@db/stimmig_box?sslmode=disable
+      STIMMIG_ADMIN_TOKEN: ${BALLOTBOX_ADMIN_TOKEN}
+      STIMMIG_KEY_ENCRYPTION_KEY: ${BALLOTBOX_KEY_ENCRYPTION_KEY}
+      STIMMIG_LOG_URL: http://log:8080
+      STIMMIG_LOG_TOKEN: ${LOG_BALLOTBOX_TOKEN}
+      STIMMIG_PUBLIC_LOG_URL: https://log.${DOMAIN}
+      STIMMIG_PUBLIC_REGISTRAR_URL: https://registrar.${DOMAIN}
+
+  # The admin web page. It speaks HTTP, so it is published on the loopback
+  # address of the host only: reach it through an SSH tunnel (README.md).
+  admin-web:
+    <<: *service
+    depends_on: [log, registrar, ballotbox]
+    command: ["admin-web"]
+    ports:
+      - "127.0.0.1:8090:8090"
+    environment:
+      STIMMIG_ADMINWEB_LISTEN: ":8090"
+      # Inside the container the page listens on all interfaces; the port
+      # mapping above keeps it on the host's loopback address.
+      STIMMIG_ADMINWEB_ALLOW_REMOTE: "1"
+      STIMMIG_ADMINWEB_TOKEN: ${ADMINWEB_TOKEN}
+      STIMMIG_LOG_URL: http://log:8080
+      STIMMIG_REGISTRAR_URL: http://registrar:8080
+      STIMMIG_BALLOTBOX_URL: http://ballotbox:8080
+      STIMMIG_LOG_ADMIN_TOKEN: ${LOG_ADMIN_TOKEN}
+      STIMMIG_REGISTRAR_ADMIN_TOKEN: ${REGISTRAR_ADMIN_TOKEN}
+      STIMMIG_BALLOTBOX_ADMIN_TOKEN: ${BALLOTBOX_ADMIN_TOKEN}
+
+  # HTTPS for the three public names, with certificates from Let's Encrypt.
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on: [log, registrar, ballotbox]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy:/data
+
+volumes:
+  db:
+  caddy:

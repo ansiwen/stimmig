@@ -49,6 +49,7 @@ registrar:
   STIMMIG_EMAIL_SECRET     secret that keys the login links and confirmations, 32 characters or more
   STIMMIG_SMTP_ADDR        host:port of the SMTP server; required unless STIMMIG_PRINT_MAILS=1 (development)
   STIMMIG_SMTP_FROM        sender address of the mails
+  STIMMIG_SMTP_USERNAME, STIMMIG_SMTP_PASSWORD  optional login at the SMTP server (PLAIN, only after STARTTLS)
   STIMMIG_MAIL_INTERVAL    shortest time between two login mails to one address, default 1m
   STIMMIG_OIDC_ISSUER      OpenID Connect issuer URL; adds the provider "oidc"
   STIMMIG_OIDC_CLIENT_ID, STIMMIG_OIDC_CLIENT_SECRET  this registrar's client at the issuer;
@@ -132,7 +133,8 @@ func serve(ctx context.Context, role string, stderr io.Writer) error {
 			_, _ = fmt.Fprintln(stderr, "stimmig registrar: warning: login mails, with the voters' addresses, are printed here")
 		}
 		if addr := os.Getenv("STIMMIG_SMTP_ADDR"); addr != "" {
-			mailer = identity.SMTPMailer{Addr: addr, From: e.get("STIMMIG_SMTP_FROM")}
+			mailer = identity.SMTPMailer{Addr: addr, From: e.get("STIMMIG_SMTP_FROM"),
+				Username: os.Getenv("STIMMIG_SMTP_USERNAME"), Password: os.Getenv("STIMMIG_SMTP_PASSWORD")}
 		}
 		handler = func(db *sql.DB) (http.Handler, error) {
 			s := &registrar.Server{DB: db, Log: log, AdminToken: adminToken, Keys: keys, Secret: []byte(secret)}

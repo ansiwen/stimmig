@@ -30,11 +30,13 @@ type Mailer interface {
 }
 
 // SMTPMailer sends mails through an SMTP server without authentication.
-//
-// shortcut: no SMTP authentication, which fits a relay on the local network; add credentials when a hosted mail service is used.
+// With a username it authenticates with PLAIN, which Go's SMTP client allows
+// only after STARTTLS (or to localhost), so the password does not travel in
+// clear.
 type SMTPMailer struct {
-	Addr string // host:port
-	From string
+	Addr               string // host:port
+	From               string
+	Username, Password string
 }
 
 // Send implements Mailer. The deadline of ctx covers the whole conversation
@@ -62,6 +64,11 @@ func (m SMTPMailer) Send(ctx context.Context, to, subject, body string) error {
 	if ok, _ := c.Extension("STARTTLS"); ok {
 		if err := c.StartTLS(&tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}); err != nil {
 			return smtpError("starttls", err)
+		}
+	}
+	if m.Username != "" {
+		if err := c.Auth(smtp.PlainAuth("", m.Username, m.Password, host)); err != nil {
+			return smtpError("login", err)
 		}
 	}
 	if err := c.Mail(m.From); err != nil {

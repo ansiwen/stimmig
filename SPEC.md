@@ -384,7 +384,7 @@ Deployment rules:
 - No service stores a link between a voter and a ballot, not even in encrypted form.
 - Log exports and proofs are immutable once published and can be served from object storage.
 - Signing keys are accessed through an HSM interface (PKCS#11 or a network HSM); a software key store exists for development.
-- Deployment artefacts are a container image and a Helm chart.
+- Deployment artefacts are a container image, a Helm chart, and a Docker Compose setup for a demo or a trial on one host (`deploy/compose`). The compose setup runs all services under one operator, so it does not give the separation of section 2; it puts Caddy in front for HTTPS with the error log switched off (it names the client of a failed request), gives each service its own database role that cannot connect to the others' databases, and publishes the admin web page on the host's loopback address only. Mail can use an SMTP server with a login (PLAIN, only after STARTTLS).
 
 Service interfaces:
 

@@ -194,3 +194,11 @@ func TestSMTPMailerHonoursTheDeadline(t *testing.T) {
 		t.Fatalf("%v after %v", err, time.Since(start))
 	}
 }
+
+func TestSMTPMailerLogsIn(t *testing.T) {
+	m := SMTPMailer{Addr: fakeSMTP(t, false), From: "noreply@example.org", Username: "user", Password: "hunter2"}
+	err := m.Send(context.Background(), "ada@example.org", "s", "b")
+	if err == nil || !strings.Contains(err.Error(), "login") || strings.Contains(err.Error(), "hunter2") {
+		t.Fatalf("%v", err)
+	}
+}

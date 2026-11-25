@@ -1,0 +1,20 @@
+{
+	# The ballot box must not record client addresses (SPEC.md section 10).
+	# Caddy writes no access log unless a site asks for one, but its error log
+	# names the client of a failed request, so it is switched off.
+	log default {
+		exclude http.log.error
+	}
+}
+
+log.{$DOMAIN} {
+	reverse_proxy log:8080
+}
+
+registrar.{$DOMAIN} {
+	reverse_proxy registrar:8080
+}
+
+vote.{$DOMAIN} {
+	reverse_proxy ballotbox:8080
+}
