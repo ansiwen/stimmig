@@ -3,6 +3,8 @@ package admin
 import (
 	"strings"
 	"testing"
+
+	"github.com/ansiwen/stimmig/tally"
 )
 
 func TestParseVotersRefusesWhatCannotLogIn(t *testing.T) {
@@ -32,5 +34,16 @@ func TestParseVoters(t *testing.T) {
 	// OpenID Connect subjects keep their case.
 	if v := roll.Voters[1]; v.Provider != "oidc" || v.Subject != "https://idp.example#User-42" {
 		t.Errorf("oidc voter: %+v", v)
+	}
+}
+
+// Defaults that an admin writes out are left out of the manifest, which must
+// have one encoding.
+func TestPreviewAcceptsDefaultsWrittenOut(t *testing.T) {
+	d := Definition{Title: "x", Tally: tally.Manifest{Candidates: []string{"A", "B"}, Method: tally.Schulze, Seats: 1, MaxRanks: 2,
+		TieBreak: []tally.TieBreakRule{tally.FirstRanks, tally.DeclareTie}}}
+	m, err := d.manifest()
+	if err != nil || m.Tally.Seats != 0 || m.Tally.MaxRanks != 0 || m.Tally.TieBreak != nil {
+		t.Fatalf("%+v, %v", m.Tally, err)
 	}
 }

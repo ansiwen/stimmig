@@ -47,23 +47,18 @@ The exit code is 0 for a valid log, 1 for an invalid one, and 2 for a usage erro
 - Resource limits beyond a CBOR nesting depth of 64. The whole file is read into memory.
 - A head-to-head tie-break that splits a group was never produced in the cross-check, so it is implemented but not confirmed against Go.
 
-## Where it differs from the Go verifier
+## Rules settled after it was written
 
-The spec leaves these manifest rules open (see the final report). On synthetic logs the two verifiers disagree:
-
-- **Python rejects, Go accepts:**
-  - `receipt_key` equal to `log_key`;
-  - `seats: 1` present;
-  - `max_ranks` equal to the number of candidates;
-  - the default `tie_break` written out explicitly;
-  - `fixed_order` without the `fixed-order` rule.
-- **Python accepts, Go rejects:**
-  - `declare-tie` or `fixed-order` before the end of the chain;
-  - a repeated rule;
-  - an empty candidate ID.
+The first version found eight manifest rules that the specification left
+open, on which this verifier and the Go verifier disagreed. They are now
+settled in SPEC.md section 7, and both verifiers follow them: a value equal
+to its default is absent, `fixed_order` comes only with the `fixed-order`
+rule, the receipt key differs from the log key, candidate IDs are not empty,
+and `fixed-order` or `declare-tie` end the tie-break chain, with no rule
+named twice.
 
 ## Where the result format comes from
 
-The format of `tie_breaks` events (`context`, `rule`, `tied`, `order`) and a few result conventions are not in SPEC.md. They were inferred from the golden export.
+The format of `tie_breaks` events (`context`, `rule`, `tied`, `order`) and a few result conventions were not in SPEC.md when this was written, and were inferred from the golden export; SPEC.md section 7 now describes them.
 
 They were then confirmed by making synthetic elections with fresh keys and checking that the Go verifier accepts the results this tally computes. That covered 60 random Schulze elections plus targeted cases (ties across the last seat, ballot rule violations, malformed plaintexts). The scripts for this are not part of this directory.

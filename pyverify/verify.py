@@ -250,6 +250,7 @@ def check_tally_config(t):
     c = t["candidates"]
     need(is_text_list(c) and 1 <= len(c) <= 500, "tally.candidates: not 1..500 texts")
     need(len(set(c)) == len(c), "tally.candidates: duplicate IDs")
+    need(all(c), "tally.candidates: empty ID")
     need(t["method"] in METHODS, "tally.method: unknown")
     # "absent for <default>": a present default value would be a second encoding, so it is refused
     if "seats" in t:
@@ -266,6 +267,8 @@ def check_tally_config(t):
         tb = t["tie_break"]
         need(is_text_list(tb) and tb and all(r in RULES for r in tb), "tally.tie_break: invalid")
         need(tb[-1] in ("fixed-order", "declare-tie"), "tally.tie_break: must end with fixed-order or declare-tie")
+        need(all(r not in ("fixed-order", "declare-tie") for r in tb[:-1]), "tally.tie_break: fixed-order or declare-tie before the end")
+        need(len(set(tb)) == len(tb), "tally.tie_break: a rule named twice")
         need(tb != ["first-ranks", "declare-tie"], "tally.tie_break: default must be absent")
     if "fixed_order" in t:
         need(is_text_list(t["fixed_order"]) and sorted(t["fixed_order"]) == sorted(c),

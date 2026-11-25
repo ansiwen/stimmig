@@ -82,7 +82,7 @@ func (d Definition) manifest() (publog.Manifest, error) {
 		Version:     publog.ManifestVersion,
 		Title:       d.Title,
 		Nonce:       make([]byte, 16),
-		Tally:       d.Tally,
+		Tally:       d.Tally.Canonical(),
 		Algorithms:  publog.DefaultAlgorithms(d.ReceiptMode),
 		ReceiptMode: d.ReceiptMode,
 	}

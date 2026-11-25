@@ -58,7 +58,7 @@ func testManifest() Manifest {
 		IssuingKey:      testKeys().issuing,
 		IssuingKeyProof: testKeys().proof,
 		ElectionKey:     testKeys().election,
-		ReceiptKey:      testKey().Public().(ed25519.PublicKey),
+		ReceiptKey:      ed25519.NewKeyFromSeed(bytes.Repeat([]byte{2}, 32)).Public().(ed25519.PublicKey),
 	}
 }
 
@@ -85,6 +85,11 @@ func TestManifestValidate(t *testing.T) {
 		// The point (0, 1): signatures under it can be made by anybody.
 		"log key of small order":     func(m *Manifest) { m.LogKey = append([]byte{1}, make([]byte, 31)...) },
 		"receipt key of small order": func(m *Manifest) { m.ReceiptKey = append([]byte{1}, make([]byte, 31)...) },
+		"receipt key is the log key": func(m *Manifest) { m.ReceiptKey = m.LogKey },
+		"seats 1 written out":        func(m *Manifest) { m.Tally.Seats = 1 },
+		"max_ranks the default":      func(m *Manifest) { m.Tally.MaxRanks = len(m.Tally.Candidates) },
+		"default tie-break written":  func(m *Manifest) { m.Tally.TieBreak = []tally.TieBreakRule{tally.FirstRanks, tally.DeclareTie} },
+		"fixed order without rule":   func(m *Manifest) { m.Tally.FixedOrder = append([]string(nil), m.Tally.Candidates...) },
 		"too many candidates": func(m *Manifest) {
 			m.Tally.Candidates = nil
 			for i := 0; i <= tally.MaxCandidates; i++ {

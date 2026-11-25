@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -189,6 +190,23 @@ func Tally(m Manifest, ballots []Ballot) (*Result, error) {
 		e.transfer()
 	}
 	return e.res, nil
+}
+
+// Canonical returns the manifest without the values that equal their
+// defaults (one seat, as many ranks as candidates, the default tie-break
+// chain), so that one set of rules has one encoding. The manifest of a log
+// must be canonical (SPEC.md section 7).
+func (m Manifest) Canonical() Manifest {
+	if m.Seats == 1 {
+		m.Seats = 0
+	}
+	if m.MaxRanks == len(m.Candidates) {
+		m.MaxRanks = 0
+	}
+	if slices.Equal(m.TieBreak, []TieBreakRule{FirstRanks, DeclareTie}) {
+		m.TieBreak = nil
+	}
+	return m
 }
 
 // MaxCandidates is the most candidates of an election.

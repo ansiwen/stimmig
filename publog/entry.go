@@ -4,8 +4,11 @@
 package publog
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"reflect"
+	"slices"
 
 	"github.com/ansiwen/stimmig/ballot"
 	"github.com/ansiwen/stimmig/canon"
@@ -179,6 +182,10 @@ func (m Manifest) Validate() error {
 		if err := credential.CheckKey(m.ReceiptKey); err != nil {
 			return fmt.Errorf("publog: receipt key: %w", err)
 		}
+		// The four keys of an election are different keys (SPEC.md section 5.6).
+		if bytes.Equal(m.ReceiptKey, m.LogKey) {
+			return errors.New("publog: the receipt key is the log key")
+		}
 	} else if len(m.ReceiptKey) != 0 {
 		return errors.New("publog: receipt key in receipt mode none")
 	}
@@ -189,6 +196,14 @@ func (m Manifest) Validate() error {
 	}
 	if len(m.ClientHash) != 0 && len(m.ClientHash) != merkle.HashSize {
 		return errors.New("publog: client hash has the wrong size")
+	}
+	// One encoding for one set of rules: a value equal to its default is left
+	// out, and a fixed order is given only for the fixed-order rule.
+	if !reflect.DeepEqual(m.Tally.Canonical(), m.Tally) {
+		return errors.New("publog: the tally rules name a default value (seats 1, max_ranks equal to the candidates, or the default tie-break chain); leave it out")
+	}
+	if len(m.Tally.FixedOrder) != 0 && !slices.Contains(m.Tally.TieBreak, tally.FixedOrder) {
+		return errors.New("publog: fixed_order without the fixed-order rule")
 	}
 	return m.Tally.Validate()
 }
