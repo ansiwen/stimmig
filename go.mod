@@ -2,6 +2,8 @@ module github.com/ansiwen/stimmig
 
 go 1.25.0
 
+toolchain go1.25.14
+
 require (
 	filippo.io/edwards25519 v1.2.0
 	github.com/cloudflare/circl v1.6.5

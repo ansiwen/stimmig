@@ -20,7 +20,7 @@ x-service: &service
 
 services:
   db:
-    image: postgres:17
+    image: postgres:17@sha256:87c8b42f423b45d5247e6aa8fdb2e7762fec164c68a50fe3eb07e7bfcaf4dbcf
     restart: unless-stopped
     environment:
       POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD:?run setup.sh}
@@ -103,7 +103,7 @@ services:
 
   # HTTPS for the three public names, with certificates from Let's Encrypt.
   caddy:
-    image: caddy:2
+    image: caddy:2@sha256:4851e54a46b206517c574821bb5cc67f170d2156041e9fbc4c9193b45e84a75b
     restart: unless-stopped
     depends_on: [log, registrar, ballotbox]
     ports:

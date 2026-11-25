@@ -150,6 +150,7 @@ let lastStatus = ['loading'];
 // lastSaved is what this tab last read or wrote. Another tab that wrote in
 // between would lose its credential or receipt to this tab's older state.
 let lastSaved = null;
+let persistAsked = false;
 function save() {
   if (localStorage.getItem(storageKey) !== lastSaved) {
     showError(t('otherTab'));
@@ -157,6 +158,13 @@ function save() {
   }
   lastSaved = JSON.stringify(state);
   localStorage.setItem(storageKey, lastSaved);
+  // Some browsers delete a site's storage after a week without a visit; the
+  // credential must last until the voting. The backup file is the remedy
+  // where the browser says no.
+  if (state.credential_key && !persistAsked && navigator.storage && navigator.storage.persist) {
+    persistAsked = true;
+    navigator.storage.persist().catch(() => {});
+  }
 }
 function setStatus(key, ...args) { lastStatus = [key, ...args]; $('status').textContent = key ? t(key, ...args) : ''; }
 function showError(err) {
