@@ -165,7 +165,9 @@ The service interfaces are in [SPEC.md](SPEC.md) section 10.
 
 For a demo or a trial on one host with Docker, use
 [`deploy/compose`](deploy/compose/README.md): one command sets up the three
-services, the admin web page, PostgreSQL and HTTPS. For a real election, with
+services, the admin web page, PostgreSQL and HTTPS, also behind an existing
+reverse proxy. [`docs/operator-runbook.md`](docs/operator-runbook.md) walks
+through running an election. For a real election, with
 separate operators, use the Helm chart:
 
 ```bash

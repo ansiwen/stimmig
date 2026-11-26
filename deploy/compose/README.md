@@ -73,6 +73,9 @@ cannot be tallied. The file is readable only by its owner.
 
 ## Run an election
 
+The steps, what to tell voters and what to do when something goes wrong are
+in the [operator runbook](../../docs/operator-runbook.md).
+
 The admin web page listens on the host's loopback address only. From your
 own computer:
 
