@@ -1,10 +1,12 @@
 #!/bin/sh
-# Writes .env with fresh secrets. Usage: ./setup.sh DOMAIN
+# Writes .env with fresh secrets. Usage: ./setup.sh DOMAIN [--behind-proxy]
+# With --behind-proxy, Caddy is not used: a reverse proxy that is already on
+# the host terminates TLS (compose.proxy.yaml, nginx.example.conf).
 # The services get the names log.DOMAIN, registrar.DOMAIN and vote.DOMAIN.
 set -eu
 cd "$(dirname "$0")"
-if [ $# -lt 1 ]; then
-	echo "usage: $0 DOMAIN" >&2
+if [ $# -lt 1 ] || { [ $# -eq 2 ] && [ "$2" != --behind-proxy ]; } || [ $# -gt 2 ]; then
+	echo "usage: $0 DOMAIN [--behind-proxy]" >&2
 	exit 2
 fi
 if [ -e .env ]; then
@@ -13,9 +15,21 @@ if [ -e .env ]; then
 fi
 secret() { od -An -tx1 -N32 /dev/urandom | tr -d ' \n'; }
 umask 077
+proxy=
+if [ "${2:-}" = --behind-proxy ]; then
+	proxy="
+# Behind an existing reverse proxy: no Caddy; log, registrar and ballot box
+# listen on PROXY_BIND at the ports below.
+COMPOSE_FILE=compose.yaml:compose.proxy.yaml
+PROXY_BIND=127.0.0.1
+LOG_PORT=8081
+REGISTRAR_PORT=8082
+BALLOTBOX_PORT=8083
+"
+fi
 cat > .env <<ENV
 DOMAIN=$1
-
+$proxy
 # Mail for the login links. Without an SMTP server, set PRINT_MAILS=1: the
 # registrar then writes the mails to its log (docker compose logs registrar),
 # which suits a test with yourself only.

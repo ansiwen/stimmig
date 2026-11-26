@@ -44,6 +44,29 @@ docker compose ps
 
 Caddy gets the certificates when the first request for each name arrives.
 
+### Behind an existing reverse proxy
+
+If the host already runs a reverse proxy that terminates TLS, such as nginx,
+leave Caddy out:
+
+```sh
+./setup.sh example.org --behind-proxy
+docker compose up -d --build
+```
+
+`.env` then selects `compose.proxy.yaml`: Caddy is not started, and the log,
+the registrar and the ballot box listen on `127.0.0.1:8081`, `:8082` and
+`:8083` (`PROXY_BIND` and the `_PORT` values in `.env` change that). Point
+`log.<domain>`, `registrar.<domain>` and `vote.<domain>` at them;
+`nginx.example.conf` is a complete example. Two things matter for the
+voting page:
+
+- The proxy must not log the clients of `vote.<domain>`: no access log, and
+  no error log either, because nginx names the client in every error line.
+  The example sets `access_log off` and `error_log /dev/null` for it, and
+  sends no `X-Forwarded-For`.
+- Plain HTTP must only redirect to HTTPS.
+
 **Keep a copy of `.env`.** The key-encryption keys in it open the keys in
 the database, the election key among them; without them a running election
 cannot be tallied. The file is readable only by its owner.
@@ -81,7 +104,7 @@ docker compose run --rm --no-deps -T log verify /dev/stdin < election.cbor
 ## Operation
 
 - Logs: `docker compose logs <service>`. The ballot box and Caddy do not log
-  client addresses: Caddy has no access log, and its error log is switched
+  client addresses (behind your own proxy, that is up to its configuration): Caddy has no access log, and its error log is switched
   off in the `Caddyfile`, because it names the client of a failed request.
 - Update: `git pull`, then `docker compose up -d --build`. Do not update
   while an election is running: a new build changes the hash of the voting

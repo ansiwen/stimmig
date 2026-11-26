@@ -1,0 +1,16 @@
+# For a host that already runs a reverse proxy (for example nginx) as the TLS
+# endpoint: Caddy is not started, and the three public services listen on the
+# host's loopback address for the proxy. setup.sh --behind-proxy selects this
+# file through COMPOSE_FILE in .env; nginx.example.conf shows the proxy side.
+services:
+  caddy:
+    profiles: [caddy] # not started unless asked for
+  log:
+    ports:
+      - "${PROXY_BIND:-127.0.0.1}:${LOG_PORT:-8081}:8080"
+  registrar:
+    ports:
+      - "${PROXY_BIND:-127.0.0.1}:${REGISTRAR_PORT:-8082}:8080"
+  ballotbox:
+    ports:
+      - "${PROXY_BIND:-127.0.0.1}:${BALLOTBOX_PORT:-8083}:8080"
